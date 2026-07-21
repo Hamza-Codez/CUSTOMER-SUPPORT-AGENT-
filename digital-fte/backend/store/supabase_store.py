@@ -15,6 +15,7 @@ parity tests police.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 import embeddings
@@ -136,6 +137,31 @@ def search_kb(query: str) -> list[dict]:
         "match_count": 3,
     }).execute()).data
     return [{"title": r["title"], "body": r["body"]} for r in rows or []]
+
+
+def get_session(session_id: str) -> list[dict]:
+    rows = (get_client().table("sessions")
+            .select("messages")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()).data
+    return list(rows[0]["messages"] or []) if rows else []
+
+
+def save_session(session_id: str, messages: list[dict]) -> None:
+    # Upsert on the primary key: one row per session, rewritten each turn.
+    # updated_at is sent explicitly — a column default only fires on INSERT, so
+    # an upsert that updates would otherwise leave the timestamp stale.
+    (get_client().table("sessions")
+     .upsert({"session_id": session_id,
+              "messages": messages,
+              "updated_at": datetime.now(timezone.utc).isoformat()},
+             on_conflict="session_id")
+     .execute())
+
+
+def clear_session(session_id: str) -> None:
+    get_client().table("sessions").delete().eq("session_id", session_id).execute()
 
 
 def reset_tickets() -> None:

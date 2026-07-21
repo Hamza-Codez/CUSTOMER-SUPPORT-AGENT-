@@ -1,49 +1,140 @@
 "use client";
 import { useEffect, useState } from "react";
+import { AlertTriangle, Inbox, ShieldAlert } from "lucide-react";
+
 import { fetchTickets } from "../api";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+
+const POLL_MS = 3000;
 
 export default function TicketsPage() {
-  const [tickets, setTickets] = useState([]);
-  const [err, setErr] = useState("");
-
-  async function load() {
-    try {
-      const data = await fetchTickets();
-      setTickets(data.tickets);
-      setErr("");
-    } catch (e) {
-      setErr(e.message + " — is the backend running on :8000?");
-    }
-  }
+  const [tickets, setTickets] = useState(null);   // null = still loading
+  const [error, setError] = useState(null);
 
   useEffect(() => {
+    let alive = true;
+
+    async function load() {
+      try {
+        const data = await fetchTickets();
+        if (!alive) return;
+        setTickets(data.tickets);
+        setError(null);
+      } catch {
+        if (!alive) return;
+        setError("Can't reach the backend — is it running on :8000?");
+      }
+    }
+
     load();
-    const t = setInterval(load, 3000); // live refresh
-    return () => clearInterval(t);
+    const timer = setInterval(load, POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
 
+  const escalated = tickets?.filter((t) => t.escalated).length ?? 0;
+
   return (
-    <div>
-      <h2>Agent work log — tickets</h2>
-      <p className="hint">Auto-refreshes every 3s. Tickets are created by the agent as it works.</p>
-      {err && <p className="empty">⚠️ {err}</p>}
-      {!err && tickets.length === 0 && (
-        <p className="empty">No tickets yet. Ask the agent to process a refund or escalate something.</p>
-      )}
-      {tickets.map((t) => (
-        <div className="ticket" key={t.id}>
-          <div className="row">
-            <span className="id">{t.id} — {t.subject}</span>
-            <span className={`badge ${t.priority === "high" ? "high" : "normal"}`}>
-              {t.escalated ? "escalated" : t.priority}
-            </span>
-          </div>
-          <div className="detail">{t.detail}</div>
-          <div className="meta">
-            {t.order_id ? `Order ${t.order_id} · ` : ""}status: {t.status} · {t.created_at}
-          </div>
+    <div className="space-y-4">
+      <header className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Audit log</h1>
+          <p className="text-sm text-ink-muted">
+            Every action the agent takes lands here. Live, newest first.
+          </p>
         </div>
+        {tickets?.length > 0 && (
+          <div className="flex shrink-0 gap-2">
+            <Badge tone="low">{tickets.length} total</Badge>
+            {escalated > 0 && <Badge tone="high">{escalated} escalated</Badge>}
+          </div>
+        )}
+      </header>
+
+      {error && (
+        <p
+          role="alert"
+          className="flex items-start gap-2 rounded-xl border border-high-line bg-high-bg px-3 py-2 text-sm text-high-fg"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          {error}
+        </p>
+      )}
+
+      {/* Loading: skeletons sized to a real card, so nothing jumps on arrival. */}
+      {tickets === null && !error && (
+        <div className="space-y-3">
+          {[0, 1, 2].map((i) => (
+            <Card key={i}>
+              <CardBody className="space-y-3">
+                <div className="flex justify-between gap-3">
+                  <Skeleton className="h-4 w-52" />
+                  <Skeleton className="h-4 w-16" />
+                </div>
+                <Skeleton className="h-3 w-4/5" />
+                <Skeleton className="h-3 w-24" />
+              </CardBody>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Empty: name the next action rather than just saying "nothing here". */}
+      {tickets?.length === 0 && (
+        <Card>
+          <CardBody className="flex flex-col items-center gap-2 py-12 text-center">
+            <Inbox className="h-6 w-6 text-ink-faint" aria-hidden />
+            <p className="text-sm font-medium">No tickets yet</p>
+            <p className="max-w-xs text-sm text-ink-muted">
+              Ask the agent to refund ORD-1002 — the approval will appear here within
+              a few seconds.
+            </p>
+          </CardBody>
+        </Card>
+      )}
+
+      {tickets?.map((ticket) => (
+        <Ticket key={ticket.id} ticket={ticket} />
       ))}
     </div>
+  );
+}
+
+function Ticket({ ticket }) {
+  return (
+    <Card className="animate-fade-up transition-colors hover:border-base-600">
+      <CardHeader>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-xs text-ink-faint">{ticket.id}</span>
+            {ticket.order_id && (
+              <span className="font-mono text-xs text-accent-400">{ticket.order_id}</span>
+            )}
+          </div>
+          <h2 className="mt-1 truncate text-sm font-semibold">{ticket.subject}</h2>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          {ticket.escalated && (
+            <Badge tone="high">
+              <ShieldAlert className="h-3 w-3" aria-hidden />
+              Escalated
+            </Badge>
+          )}
+          <Badge tone={ticket.priority === "high" ? "high" : "normal"}>
+            {ticket.priority}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardBody className="pt-2">
+        <p className="text-sm leading-relaxed text-ink-muted">{ticket.detail}</p>
+        <p className="mt-2 font-mono text-[11px] text-ink-faint">
+          {ticket.status} · {ticket.created_at}
+        </p>
+      </CardBody>
+    </Card>
   );
 }

@@ -6,14 +6,18 @@ MODEL_PROVIDER=openai or ollama. It is intentionally rule-based, not "smart".
 """
 from __future__ import annotations
 
+import json
+import os
 import re
+import time
 import uuid
-from typing import Any, Optional, Sequence
+from typing import Any, Iterator, Optional, Sequence
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import (AIMessage, AIMessageChunk, BaseMessage,
+                                     HumanMessage, ToolMessage)
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 ORDER_RE = re.compile(r"ORD-\d+", re.IGNORECASE)
 KB_MARKER_RE = re.compile(r"^\[[^\]]+\]\s*", re.MULTILINE)
@@ -101,6 +105,44 @@ class MockToolCallingModel(BaseChatModel):
 
         # Default: answer from the knowledge base.
         return self._call("search_kb", {"query": text})
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        """Emit the answer word by word so the streaming UI has something to stream.
+
+        This is SIMULATED streaming — the reply is computed in full by _generate
+        first, then chopped up. A real provider streams as it infers. It exists
+        so the streaming path is demoable and testable with no API key
+        (INTENT §5); it is not a claim about model latency.
+        """
+        message = self._generate(messages, stop, run_manager, **kwargs).generations[0].message
+
+        if message.tool_calls:
+            # A tool call is atomic — there is nothing meaningful to chop up.
+            yield ChatGenerationChunk(message=AIMessageChunk(
+                content="",
+                tool_call_chunks=[{
+                    "name": call["name"],
+                    "args": json.dumps(call["args"]),
+                    "id": call["id"],
+                    "index": index,
+                } for index, call in enumerate(message.tool_calls)],
+            ))
+            return
+
+        delay = float(os.getenv("MOCK_STREAM_DELAY_MS", "18")) / 1000
+        for word in re.findall(r"\S+\s*|\s+", message.content):
+            if delay:
+                time.sleep(delay)
+            chunk = ChatGenerationChunk(message=AIMessageChunk(content=word))
+            if run_manager:
+                run_manager.on_llm_new_token(word, chunk=chunk)
+            yield chunk
 
     def _call(self, name: str, args: dict) -> ChatResult:
         msg = AIMessage(

@@ -10,6 +10,7 @@ fail — which is the entire point.
 """
 from __future__ import annotations
 
+import copy
 import itertools
 from datetime import datetime, timedelta, timezone
 
@@ -50,6 +51,9 @@ class _TableQuery:
         self._orders = []
         self._limit = None
         self._insert = None
+        self._upsert = None
+        self._conflict = None
+        self._delete = False
 
     def select(self, _columns="*"):
         self._rows = list(self._db.tables[self._table])
@@ -71,9 +75,30 @@ class _TableQuery:
         self._insert = row
         return self
 
+    def upsert(self, row, on_conflict=None):
+        self._upsert = row if isinstance(row, list) else [row]
+        self._conflict = on_conflict
+        return self
+
+    def delete(self):
+        self._delete = True
+        return self
+
     def execute(self):
         if self._insert is not None:
             return _Result([self._db.insert(self._table, self._insert)])
+
+        if self._upsert is not None:
+            return _Result([self._db.upsert(self._table, row, self._conflict)
+                            for row in self._upsert])
+
+        if self._delete:
+            kept, removed = [], []
+            for row in self._db.tables[self._table]:
+                match = all(row.get(c) == v for c, v in self._filters)
+                (removed if match else kept).append(row)
+            self._db.tables[self._table] = kept
+            return _Result(removed)
 
         rows = self._rows if self._rows is not None else list(self._db.tables[self._table])
         for column, value in self._filters:
@@ -83,7 +108,10 @@ class _TableQuery:
             rows.sort(key=lambda r: r.get(column) or "", reverse=desc)
         if self._limit is not None:
             rows = rows[:self._limit]
-        return _Result(rows)
+        # A real query returns values parsed from a JSON response, never
+        # references into the server's storage. Copy, so a caller mutating a
+        # fetched row cannot reach back into this table.
+        return _Result(copy.deepcopy(rows))
 
 
 class _Rpc:
@@ -107,6 +135,7 @@ class FakeSupabase:
             "orders": [dict(o) for o in _PG_ORDERS],
             "tickets": [],
             "kb_docs": [],
+            "sessions": [],
         }
         vectors = embeddings.embed([f"{d['title']} {d['body']}" for d in kb_docs])
         for doc, vector in zip(kb_docs, vectors):
@@ -127,6 +156,16 @@ class FakeSupabase:
                 "created_at",
                 datetime.now(timezone.utc).isoformat(timespec="seconds").replace("Z", "+00:00"),
             )
+        self.tables[table].append(stored)
+        return stored
+
+    def upsert(self, table, row, on_conflict=None):
+        stored = copy.deepcopy(row)          # Postgres stores a value, not a reference
+        key = on_conflict or "id"
+        for index, existing in enumerate(self.tables[table]):
+            if existing.get(key) == stored.get(key):
+                self.tables[table][index] = stored
+                return stored
         self.tables[table].append(stored)
         return stored
 

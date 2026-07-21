@@ -60,6 +60,14 @@ def main() -> int:
     check("refusal escalated", any(t["escalated"] and t["order_id"] == "ORD-1003"
                                    for t in after[:2]))
 
+    print("\nSessions (conversation memory)")
+    probe = [{"type": "human", "data": {"content": "verify script", "type": "human"}}]
+    store.save_session("verify-script", probe)
+    check("session round-trips", store.get_session("verify-script") == probe)
+    store.clear_session("verify-script")
+    check("session clears", store.get_session("verify-script") == [],
+          "run db/migrations/0003_sessions.sql")
+
     print("\nGuardrail replies")
     print(f"  refund   : {refund}")
     print(f"  refused  : {refused}")

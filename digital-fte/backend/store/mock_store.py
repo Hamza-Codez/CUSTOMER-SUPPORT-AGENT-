@@ -5,6 +5,7 @@ This lets the whole agent run end-to-end with NO external services.
 """
 from __future__ import annotations
 
+import copy
 import itertools
 import re
 from datetime import datetime, timedelta, timezone
@@ -90,6 +91,11 @@ ORDERS = {
 TICKETS: list[dict] = []
 _ticket_counter = itertools.count(1)
 
+# --- Conversation memory (the FTE's third trait) -----------------------------
+# session_id -> serialized message dicts. Lost on restart; the Supabase backend
+# persists the same shape to a table.
+SESSIONS: dict[str, list[dict]] = {}
+
 # --- Retrieval ---------------------------------------------------------------
 # Words too common to signal relevance. Without this filter a substring match
 # makes every question "hit" every article, and a KB miss can never be detected.
@@ -149,8 +155,29 @@ def search_kb(query: str) -> list[dict]:
     return [{"title": d["title"], "body": d["body"]} for _, d in scored[:TOP_K]]
 
 
+def get_session(session_id: str) -> list[dict]:
+    # A deep copy, so callers can't mutate stored memory in place. Postgres
+    # hands back a fresh row every read and this must behave the same — a
+    # shallow copy still shares each message's nested `data` dict.
+    return copy.deepcopy(SESSIONS.get(session_id, []))
+
+
+def save_session(session_id: str, messages: list[dict]) -> None:
+    SESSIONS[session_id] = copy.deepcopy(messages)
+
+
+def clear_session(session_id: str) -> None:
+    SESSIONS.pop(session_id, None)
+
+
 def reset_tickets() -> None:
     """Clear the ticket log. Used by tests so each case starts from a clean audit trail."""
     global _ticket_counter
     TICKETS.clear()
     _ticket_counter = itertools.count(1)
+
+
+def reset_sessions() -> None:
+    """Clear all conversation memory. Tests only — mock backend has no equivalent
+    on Supabase, where wiping every session wholesale is never a routine action."""
+    SESSIONS.clear()

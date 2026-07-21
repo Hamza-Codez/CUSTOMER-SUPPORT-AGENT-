@@ -13,7 +13,13 @@ Frozen interface — both backends implement these identically:
                order_id=None) -> dict
     list_tickets() -> list[dict]                  # newest first
     search_kb(query: str) -> list[dict]           # [{title, body}], best first
+    get_session(session_id: str) -> list[dict]    # serialized messages, [] if new
+    save_session(session_id: str, messages: list[dict]) -> None
+    clear_session(session_id: str) -> None
     reset_tickets() -> None                       # tests only
+
+Sessions are stored as plain JSON dicts: the data layer never imports LangChain.
+`main.py` converts with `messages_to_dict` / `messages_from_dict`.
 """
 from __future__ import annotations
 
@@ -57,6 +63,18 @@ def list_tickets() -> list[dict]:
 
 def search_kb(query: str) -> list[dict]:
     return _backend().search_kb(query)
+
+
+def get_session(session_id: str) -> list[dict]:
+    return _backend().get_session(session_id)
+
+
+def save_session(session_id: str, messages: list[dict]) -> None:
+    return _backend().save_session(session_id, messages)
+
+
+def clear_session(session_id: str) -> None:
+    return _backend().clear_session(session_id)
 
 
 def reset_tickets() -> None:

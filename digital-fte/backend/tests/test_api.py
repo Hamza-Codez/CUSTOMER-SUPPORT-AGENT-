@@ -6,6 +6,8 @@ plus the API error contract. No API key, no network.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -13,6 +15,7 @@ import main
 import model
 import store
 from main import app
+from store import mock_store
 
 client = TestClient(app)
 
@@ -137,7 +140,7 @@ def test_agent_failure_returns_a_clean_500_envelope(monkeypatch):
     assert response.status_code == 500
     assert "temporarily unavailable" in response.json()["detail"]
     assert "model exploded" not in response.text          # no internals leaked
-    assert main.SESSIONS.get("boom") == []                # failed turn not retained
+    assert store.get_session("boom") == []                # failed turn not retained
 
 
 def test_unknown_provider_raises_a_clear_value_error(monkeypatch):
@@ -152,21 +155,21 @@ def test_sessions_do_not_leak_into_each_other():
     chat("what is your refund policy", "alice")
     chat("what is your warranty", "bob")
 
-    alice = [m.content for m in main.SESSIONS["alice"] if hasattr(m, "content")]
-    assert not any("warranty" in str(c).lower() for c in alice)
-    assert len(main.SESSIONS["bob"]) < len(main.SESSIONS["alice"]) + 10
+    alice = json.dumps(store.get_session("alice"))
+    assert "warranty" not in alice.lower()
+    assert store.get_session("bob")
 
 
 def test_memory_accumulates_within_one_session():
     chat("what is your refund policy", "memo")
-    first = len(main.SESSIONS["memo"])
+    first = len(store.get_session("memo"))
     chat("what about shipping times", "memo")
-    assert len(main.SESSIONS["memo"]) > first
+    assert len(store.get_session("memo")) > first
 
 
 @pytest.fixture(autouse=True)
 def clean_sessions():
-    main.SESSIONS.clear()
+    mock_store.reset_sessions()
     yield
-    main.SESSIONS.clear()
-    store.reset_tickets()
+    mock_store.reset_sessions()
+    mock_store.reset_tickets()
