@@ -12,33 +12,14 @@ Guardrail contract (policy in code, never in the prompt):
 """
 from __future__ import annotations
 
-import re
-
 from langchain_core.tools import tool
 
-from store import KNOWLEDGE_BASE, get_order, add_ticket
-
-# Words too common to signal relevance — without this filter a substring match
-# makes every question "hit" every article, and a KB miss can never be detected.
-_STOPWORDS = {
-    "the", "and", "for", "are", "you", "your", "our", "can", "does", "did", "was",
-    "were", "with", "what", "when", "where", "why", "how", "this", "that", "there",
-    "here", "please", "need", "want", "have", "has", "had", "will", "would", "about",
-    "from", "get", "got", "any", "all", "not", "but", "its", "his", "her", "them",
-    "they", "she", "hers", "him", "who", "whom", "been", "being", "into", "than",
-    "then", "some", "much", "many", "just", "know", "tell", "let",
-}
-
-
-def _tokens(text: str) -> set[str]:
-    """Meaningful lowercase word tokens (>=3 chars, no stopwords)."""
-    return {w for w in re.findall(r"[a-z0-9]+", text.lower())
-            if len(w) >= 3 and w not in _STOPWORDS}
+import store
 
 
 def _escalate(summary: str, order_id: str | None = None) -> dict:
     """Single path for every handoff to a human: high priority, flagged, auditable."""
-    return add_ticket(
+    return store.add_ticket(
         subject="ESCALATION: needs human review",
         detail=summary,
         priority="high",
@@ -54,29 +35,24 @@ def search_kb(query: str) -> str:
     If nothing is found this tool escalates to a human by itself — relay its
     answer and do NOT escalate again.
     """
-    q_tokens = _tokens(query)
-    hits = []
-    for doc in KNOWLEDGE_BASE:
-        # Naive token overlap — replace with vector similarity in production.
-        score = len(q_tokens & _tokens(doc["title"] + " " + doc["body"]))
-        if score:
-            hits.append((score, doc))
+    # Retrieval belongs to the data layer (keyword on mock, pgvector on Supabase).
+    # This tool owns only the policy: format what came back, or escalate.
+    docs = store.search_kb(query)
 
-    if not hits:
+    if not docs:
         # Grounded or escalate: never let the model fill the gap from its own knowledge.
         ticket = _escalate(f"Knowledge-base miss. Customer asked: {query}")
         return (f"No knowledge-base article covers that, so I can't answer it myself. "
                 f"I've passed it to a human specialist (ticket {ticket['id']}) "
                 f"who will follow up shortly.")
 
-    hits.sort(key=lambda x: x[0], reverse=True)
-    return "\n\n".join(f"[{d['title']}] {d['body']}" for _, d in hits[:3])
+    return "\n\n".join(f"[{d['title']}] {d['body']}" for d in docs)
 
 
 @tool
 def track_order(order_id: str) -> str:
     """Look up the status of an order by its ID (e.g. 'ORD-1001')."""
-    order = get_order(order_id)
+    order = store.get_order(order_id)
     if not order:
         # A bad ID is usually a typo, not a handoff — ask, don't escalate.
         return (f"I couldn't find an order with ID '{order_id}'. "
@@ -99,7 +75,7 @@ def process_refund(order_id: str, reason: str) -> str:
     An out-of-policy order is refused and escalated by this tool itself — relay
     its answer and do NOT escalate again.
     """
-    order = get_order(order_id)
+    order = store.get_order(order_id)
     if not order:
         return (f"I couldn't find an order with ID '{order_id}', so I can't refund it. "
                 f"Please double-check the ID — it looks like 'ORD-1001'.")
@@ -117,7 +93,7 @@ def process_refund(order_id: str, reason: str) -> str:
                 f"I've escalated it to a specialist (ticket {ticket['id']}) "
                 f"who will review it and follow up shortly.")
 
-    ticket = add_ticket(
+    ticket = store.add_ticket(
         subject=f"Refund issued for {order['order_id']}",
         detail=f"Refund of ${order['total']:.2f} approved. Reason: {reason}",
         priority="normal",
@@ -130,7 +106,7 @@ def process_refund(order_id: str, reason: str) -> str:
 @tool
 def create_ticket(subject: str, detail: str, priority: str = "normal") -> str:
     """Create a support ticket to track an issue. Priority: low | normal | high."""
-    ticket = add_ticket(subject=subject, detail=detail, priority=priority)
+    ticket = store.add_ticket(subject=subject, detail=detail, priority=priority)
     return f"Created ticket {ticket['id']} ({priority} priority): {subject}"
 
 

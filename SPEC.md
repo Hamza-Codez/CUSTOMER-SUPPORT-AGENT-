@@ -22,10 +22,17 @@ backend/
   main.py        FastAPI app + endpoints + session memory
   agent.py       LangGraph ReAct agent (model + tools + system prompt)
   tools.py       5 tools (the agent's actions)
-  store.py       data access (mock; swap for Supabase)
+  store/         data layer — the only seam upstream code touches
+    __init__.py    backend switch (mock | supabase) + the frozen interface
+    mock_store.py  in-memory + keyword retrieval (zero-setup default)
+    supabase_store.py  Postgres + pgvector, same signatures
   model.py       provider switch: mock | openai | ollama
   mock_model.py  offline rule-based tool-calling model
-  tests/         conftest.py · test_tools.py (unit) · test_api.py (full flow)
+  embeddings.py  embedding switch: mock | openai | ollama
+  db/migrations/ 0001_init.sql (schema + match_kb_docs RPC) · 0002_seed_orders.sql
+  scripts/       ingest_kb.py (embed + load KB) · verify_supabase.py (contract check)
+  tests/         conftest · fakes · test_tools · test_api · test_store_parity ·
+                 test_tools_on_supabase
   requirements.txt
   .env.example
 frontend/
@@ -47,8 +54,9 @@ frontend/
 ### `GET /health`
 Response `200`:
 ```json
-{ "status": "ok", "provider": "mock" }
+{ "status": "ok", "provider": "mock", "data": "mock" }
 ```
+`provider` = live model provider · `data` = live store backend (`mock | supabase`).
 
 ### `POST /chat`
 Request:
@@ -104,8 +112,23 @@ Newest first.
 | status | str | default `open` |
 | created_at | str (ISO-8601 Z) | auto |
 
-### KB doc (`store.KNOWLEDGE_BASE`)
-`{ title: str, body: str }` — keyword search now; vector search in prod.
+### KB doc (`kb_docs` / `mock_store.KNOWLEDGE_BASE`)
+`{ title: str, body: str }` — keyword overlap on mock, pgvector cosine on Supabase.
+
+### Store interface (frozen — both backends implement it identically)
+```python
+get_order(order_id: str) -> dict | None
+add_ticket(subject, detail, priority="normal", escalated=False, order_id=None) -> dict
+list_tickets() -> list[dict]          # newest first
+search_kb(query: str) -> list[dict]   # [{title, body}], best first, [] on a miss
+reset_tickets() -> None               # mock only; Supabase refuses (audit log)
+```
+Upstream code calls `store.<fn>` only. Retrieval lives in the store, never in a
+tool — `tools.search_kb` owns formatting and the escalation policy, nothing else.
+
+**Postgres shape coercion.** PostgREST returns `numeric` as a string and
+`timestamptz` with a `+00:00` offset. `supabase_store` coerces every row back to
+the shapes above before returning; `tests/test_store_parity.py` enforces it.
 
 ---
 
@@ -151,6 +174,36 @@ Env: `MODEL_PROVIDER = mock | openai | ollama` (default `mock`).
 
 Switching provider = env change only. No code change.
 
+## 7b. Data backend switch (`store/__init__.py`)
+Env: `DATA_BACKEND = mock | supabase` (default `mock`).
+
+| backend | requires | storage | retrieval |
+|---|---|---|---|
+| mock | nothing | in-memory; tickets lost on restart | keyword token overlap |
+| supabase | `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` | Postgres; tickets persist | pgvector cosine via `match_kb_docs` |
+
+Read at call time, so the backend can be switched without a restart.
+
+## 7c. Embedding switch (`embeddings.py`)
+Env: `EMBEDDING_PROVIDER = mock | openai | ollama` (default `mock`),
+`EMBEDDING_DIM` (default 1536, must equal `kb_docs.embedding` dims).
+
+`mock` is a deterministic hashed bag-of-words: offline, and lexically meaningful
+enough that cosine similarity behaves like keyword overlap — so the vector path
+is demoable and testable with no API key. It is **not semantic**: "refund" and
+"money back" are unrelated to it. Use `openai` for real retrieval.
+
+Changing the embedding provider requires re-running `scripts/ingest_kb.py` —
+vectors from one model are not comparable to queries embedded by another.
+
+### Supabase setup (one time)
+```bash
+# 1. run db/migrations/0001_init.sql then 0002_seed_orders.sql in the SQL Editor
+# 2. set SUPABASE_URL + SUPABASE_SERVICE_KEY in .env, DATA_BACKEND=supabase
+python scripts/ingest_kb.py        # embed + load the knowledge base
+python scripts/verify_supabase.py  # prove the contracts hold against your project
+```
+
 ---
 
 ## 8. Frontend behaviour
@@ -174,21 +227,34 @@ Switching provider = env change only. No code change.
 | Invalid request body | Pydantic returns `422` |
 | Backend down | frontend shows "is the backend running on :8000?" |
 | Bad provider env | `model.get_model()` raises clear `ValueError` |
+| Bad `DATA_BACKEND` | `store._backend()` raises clear `ValueError` |
+| `supabase` without credentials | `ValueError` naming the two missing env vars |
+| Ticket insert returns no row | `RuntimeError` — the action must never be silently unlogged |
+| `reset_tickets()` on Supabase | refused — the audit log is not disposable |
 
 ---
 
 ## 10. Testing methodology
-- **Unit** (`tests/test_tools.py`, 11 tests): each tool against the mock store —
-  policy branches, ticket counts, ticket shape, and customer-safe strings.
-- **Integration** (`tests/test_api.py`, 15 tests): full agent loop over HTTP on
+- **Unit** (`test_tools.py`, 11): each tool against the mock store — policy
+  branches, ticket counts, ticket shape, customer-safe strings.
+- **Integration** (`test_api.py`, 15): full agent loop over HTTP on
   `MODEL_PROVIDER=mock` — no API key, CI-safe.
+- **Parity** (`test_store_parity.py`, 33): the *same* assertions against both
+  backends. The Supabase side runs on `tests/fakes.FakeSupabase`, which returns
+  PostgREST-shaped rows (numeric as string, timestamptz with offset,
+  server-generated ids) so the coercion layer is genuinely exercised.
+- **Guardrails after the swap** (`test_tools_on_supabase.py`, 6): the Phase 1
+  policy tests re-run unmodified on the Supabase backend.
 - **Verified scenarios:** KB answer · order track · valid refund · invalid refund
   refusal · KB miss · angry-case escalation · unknown order id · ticket log
-  correctness · session isolation · 500 envelope · bad provider env.
+  correctness · session isolation · 500 envelope · bad provider env · bad data
+  backend · missing Supabase credentials · audit-log deletion refused.
 - **Manual:** `uvicorn` + `curl` for `/health`, `/chat`, `/tickets`.
+- **Against a real project:** `scripts/verify_supabase.py` (needs credentials;
+  not part of CI).
 
 ```bash
-cd digital-fte/backend && python -m pytest tests/ -q     # 26 passed
+cd digital-fte/backend && python -m pytest tests/ -q     # 65 passed
 ```
 
 ---
@@ -206,12 +272,12 @@ Chat: http://localhost:3000 · Tickets: http://localhost:3000/tickets
 ---
 
 ## 12. Production swaps (interface-preserving)
-| now | prod |
-|---|---|
-| `store.KNOWLEDGE_BASE` + keyword | pgvector similarity (Supabase) |
-| `store.ORDERS` | orders API / Supabase table |
-| `store.TICKETS` | Supabase table |
-| `main.SESSIONS` dict | Supabase / Redis |
-| `process_refund` stub | payments/refund API |
+| now | prod | status |
+|---|---|---|
+| `mock_store.KNOWLEDGE_BASE` + keyword | `kb_docs` + pgvector | **done** — `DATA_BACKEND=supabase` |
+| `mock_store.ORDERS` | `orders` table | **done** — same switch |
+| `mock_store.TICKETS` | `tickets` table | **done** — same switch |
+| `main.SESSIONS` dict | Supabase / Redis | deferred to Phase 3 (shares the message path with streaming) |
+| `process_refund` stub | payments/refund API | open — payments API not yet chosen |
 
 Each swap keeps the same function signature — the agent and API don't change.

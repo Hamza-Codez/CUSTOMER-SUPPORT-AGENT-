@@ -15,8 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
+import store
 from agent import get_agent
-from store import list_tickets
 
 logger = logging.getLogger("digital-fte")
 
@@ -47,7 +47,13 @@ class ChatResponse(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "provider": os.getenv("MODEL_PROVIDER", "mock")}
+    # `data` matters now that two stores exist: it tells you at a glance whether
+    # the tickets you're looking at are in memory or in Postgres.
+    return {
+        "status": "ok",
+        "provider": os.getenv("MODEL_PROVIDER", "mock"),
+        "data": store.backend_name(),
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -87,4 +93,4 @@ def chat(req: ChatRequest):
 
 @app.get("/tickets")
 def tickets():
-    return {"tickets": list_tickets()}
+    return {"tickets": store.list_tickets()}

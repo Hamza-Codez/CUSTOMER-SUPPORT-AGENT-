@@ -33,9 +33,9 @@ def chat(message: str, session_id: str = "test") -> str:
 
 # --- contract ----------------------------------------------------------------
 
-def test_health_reports_the_live_provider():
+def test_health_reports_the_live_provider_and_store():
     body = client.get("/health").json()
-    assert body == {"status": "ok", "provider": "mock"}
+    assert body == {"status": "ok", "provider": "mock", "data": "mock"}
 
 
 def test_chat_response_shape_matches_the_spec():

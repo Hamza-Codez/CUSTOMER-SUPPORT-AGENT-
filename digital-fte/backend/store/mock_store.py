@@ -1,11 +1,12 @@
-"""In-memory mock data store.
+"""In-memory mock backend — the zero-setup default.
 
-This lets the whole agent run end-to-end with ZERO external setup.
-Swap these functions for Supabase / a real DB later without touching the agent.
+This lets the whole agent run end-to-end with NO external services.
+`store/supabase_store.py` implements the same functions against Postgres.
 """
 from __future__ import annotations
 
 import itertools
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -15,8 +16,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-# --- Knowledge base (stands in for a RAG vector store) -----------------------
-# In production, replace `search_kb` with a Pinecone / pgvector similarity search.
+# --- Knowledge base (stands in for the pgvector store) -----------------------
+# The same five documents seed `kb_docs` in Supabase, so the demo is identical
+# on both backends and any behaviour change is provably the swap, not content.
 KNOWLEDGE_BASE = [
     {
         "title": "Shipping times",
@@ -88,6 +90,26 @@ ORDERS = {
 TICKETS: list[dict] = []
 _ticket_counter = itertools.count(1)
 
+# --- Retrieval ---------------------------------------------------------------
+# Words too common to signal relevance. Without this filter a substring match
+# makes every question "hit" every article, and a KB miss can never be detected.
+_STOPWORDS = {
+    "the", "and", "for", "are", "you", "your", "our", "can", "does", "did", "was",
+    "were", "with", "what", "when", "where", "why", "how", "this", "that", "there",
+    "here", "please", "need", "want", "have", "has", "had", "will", "would", "about",
+    "from", "get", "got", "any", "all", "not", "but", "its", "his", "her", "them",
+    "they", "she", "hers", "him", "who", "whom", "been", "being", "into", "than",
+    "then", "some", "much", "many", "just", "know", "tell", "let",
+}
+
+TOP_K = 3
+
+
+def _tokens(text: str) -> set[str]:
+    """Meaningful lowercase word tokens (>=3 chars, no stopwords)."""
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower())
+            if len(w) >= 3 and w not in _STOPWORDS}
+
 
 def get_order(order_id: str) -> Optional[dict]:
     return ORDERS.get(order_id.strip().upper())
@@ -111,6 +133,20 @@ def add_ticket(subject: str, detail: str, priority: str = "normal",
 
 def list_tickets() -> list[dict]:
     return list(reversed(TICKETS))  # newest first
+
+
+def search_kb(query: str) -> list[dict]:
+    """Keyword retrieval by token overlap. Supabase replaces this with pgvector
+    cosine similarity — same signature, same `[{title, body}]` return shape.
+    """
+    q_tokens = _tokens(query)
+    scored = []
+    for doc in KNOWLEDGE_BASE:
+        score = len(q_tokens & _tokens(doc["title"] + " " + doc["body"]))
+        if score:
+            scored.append((score, doc))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [{"title": d["title"], "body": d["body"]} for _, d in scored[:TOP_K]]
 
 
 def reset_tickets() -> None:
