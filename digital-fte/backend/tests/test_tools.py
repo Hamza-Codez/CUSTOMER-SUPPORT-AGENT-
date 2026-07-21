@@ -132,7 +132,7 @@ def test_ticket_shape_matches_the_spec():
     escalate_to_human.invoke({"summary": "context", "order_id": ""})
     ticket = store.TICKETS[0]
     assert set(ticket) == {"id", "subject", "detail", "priority", "escalated",
-                           "order_id", "status", "created_at"}
+                           "order_id", "user_id", "status", "created_at"}
     assert ticket["status"] == "open"
     assert ticket["order_id"] is None            # empty string normalised to null
     assert ticket["created_at"].endswith("Z")

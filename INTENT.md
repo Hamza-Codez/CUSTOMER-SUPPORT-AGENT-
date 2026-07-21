@@ -47,14 +47,18 @@ The system is done when, unaided:
 - It refunds an in-policy order and refuses an out-of-policy one.
 - It escalates a complex/angry case as a high-priority ticket.
 - Every action appears on the live dashboard.
+- Every state-changing request carries a valid session; unauthenticated calls are refused.
+- Memory is scoped per user, so sessions are private and never read across accounts.
 - It runs end-to-end with **zero external setup** (mock provider) and swaps to a
-  real model/DB by config only.
+  real model/DB/auth by config only.
 
 ## 6. Architecture intent
 ```
 Next.js (chat + ticket dashboard)
-      │  HTTP
-FastAPI (orchestration, memory, logging)
+      │  HTTP + Authorization: Bearer <token>
+Auth layer (Supabase Auth): verify session · roles (customer | agent)
+      │  (authenticated requests only)
+FastAPI (orchestration, per-user memory, logging)
       │
 LangGraph ReAct agent  ──►  tools:
       │                      search_kb · track_order · process_refund
@@ -69,6 +73,8 @@ Data: mock in-memory store now → Supabase + pgvector later
 - *Tools over prompting* — actions live in code so they're testable and safe.
 - *Provider switch* — never blocked on an API key; test on mock, ship on real.
 - *Mock-first store* — full flow works day one; production is a swap, not a rewrite.
+- *Auth at the edge* — identity verified before orchestration; state-changing
+  actions and the audit log are never exposed to unauthenticated or wrong-role callers.
 
 ## 7. Least-error methodology (every phase)
 - **Plan:** every feature traces to a PRD metric or it doesn't get built.

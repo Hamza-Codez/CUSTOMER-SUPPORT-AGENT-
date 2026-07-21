@@ -16,9 +16,9 @@ from fakes import FakeSupabase
 from store import mock_store, supabase_store
 
 TICKET_FIELDS = {"id", "subject", "detail", "priority", "escalated",
-                 "order_id", "status", "created_at"}
+                 "order_id", "user_id", "status", "created_at"}
 ORDER_FIELDS = {"order_id", "customer", "items", "total", "status",
-                "carrier", "tracking", "eta", "refundable"}
+                "carrier", "tracking", "eta", "refundable", "user_id"}
 
 
 @pytest.fixture(params=["mock", "supabase"])

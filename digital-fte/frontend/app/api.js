@@ -1,30 +1,62 @@
+import { getToken } from "./auth";
+
 // Base URL of the FastAPI backend. Override in .env.local for deployment.
 export const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const OFFLINE_HINT = "is the backend running on :8000?";
 
+/** Thrown for 401/403 so callers can react to identity problems specifically. */
+export class AuthError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = "AuthError";
+    this.status = status;
+  }
+}
+
+function authHeaders(extra = {}) {
+  const token = getToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+async function guard(res) {
+  if (res.status === 401) throw new AuthError(401, "Your session has expired — sign in again.");
+  if (res.status === 403) throw new AuthError(403, "Your account doesn't have access to this.");
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return res;
+}
+
+export async function fetchMe() {
+  const res = await fetch(`${API_URL}/me`, {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  return (await guard(res)).json();
+}
+
 export async function sendChat(message, sessionId) {
   const res = await fetch(`${API_URL}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ message, session_id: sessionId }),
   });
-  if (!res.ok) throw new Error(`Backend error ${res.status}`);
-  return res.json();
+  return (await guard(res)).json();
 }
 
 export async function fetchTickets() {
-  const res = await fetch(`${API_URL}/tickets`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Backend error ${res.status}`);
-  return res.json();
+  const res = await fetch(`${API_URL}/tickets`, {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  return (await guard(res)).json();
 }
 
 /**
  * Stream a reply from POST /chat/stream.
  *
  * Uses fetch rather than EventSource because the endpoint is a POST with a JSON
- * body, which EventSource cannot send.
+ * body and an Authorization header, neither of which EventSource can send.
  *
  * Calls `onEvent` with each decoded frame:
  *   { type: "tool",  name }   a tool started running
@@ -40,7 +72,7 @@ export async function streamChat(message, sessionId, onEvent, signal) {
   try {
     res = await fetch(`${API_URL}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ message, session_id: sessionId }),
       signal,
     });
@@ -49,6 +81,7 @@ export async function streamChat(message, sessionId, onEvent, signal) {
     throw new Error(`Can't reach the agent — ${OFFLINE_HINT}`);
   }
 
+  if (res.status === 401 || res.status === 403) await guard(res);
   if (!res.ok) throw new Error(`Backend error ${res.status} — ${OFFLINE_HINT}`);
   if (!res.body) throw new Error("This browser can't read streaming responses.");
 

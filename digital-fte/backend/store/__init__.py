@@ -8,9 +8,10 @@ call time by env var, mirroring `model.get_model()`:
 
 Frozen interface — both backends implement these identically:
 
-    get_order(order_id: str) -> dict | None
+    get_order(order_id: str, user_id=None) -> dict | None   # scoped to the owner
     add_ticket(subject, detail, priority="normal", escalated=False,
-               order_id=None) -> dict
+               order_id=None, user_id=None) -> dict
+    seed_demo_orders(user_id: str) -> list[dict]            # onboarding
     list_tickets() -> list[dict]                  # newest first
     search_kb(query: str) -> list[dict]           # [{title, body}], best first
     get_session(session_id: str) -> list[dict]    # serialized messages, [] if new
@@ -23,11 +24,52 @@ Sessions are stored as plain JSON dicts: the data layer never imports LangChain.
 """
 from __future__ import annotations
 
+import functools
 import importlib
 import os
 from typing import Optional
 
 _BACKENDS = {"mock": ".mock_store", "supabase": ".supabase_store"}
+
+
+class StoreUnavailable(Exception):
+    """The data layer could not be reached, or isn't provisioned yet.
+
+    Raised instead of letting a driver exception escape as a 500 with a stack
+    trace. `main.py` turns this into a 503 carrying the instruction below.
+    """
+
+
+# PostgREST/Postgres codes that mean "the schema isn't set up", not "it broke".
+_NOT_PROVISIONED = {"PGRST205", "PGRST202", "42P01", "42883"}
+_RUN_MIGRATIONS = (
+    "The database is not provisioned. Run db/migrations/0001_init.sql, "
+    "0002_seed_orders.sql, 0003_sessions.sql and 0004_user_scoping.sql, "
+    "or set DATA_BACKEND=mock to run without a database."
+)
+
+
+def _guard(fn):
+    """Translate driver failures into StoreUnavailable, so no route can leak one.
+
+    ValueError and RuntimeError pass through untouched: those are our own
+    deliberate signals (bad config, refusing to wipe the audit log), and tests
+    assert on them directly.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (ValueError, RuntimeError, StoreUnavailable):
+            raise
+        except Exception as exc:
+            code = str(getattr(exc, "code", "") or "")
+            if code in _NOT_PROVISIONED:
+                raise StoreUnavailable(_RUN_MIGRATIONS) from exc
+            raise StoreUnavailable(
+                f"The data store is unavailable ({type(exc).__name__})."
+            ) from exc
+    return wrapper
 
 
 def _backend():
@@ -47,32 +89,46 @@ def backend_name() -> str:
     return os.getenv("DATA_BACKEND", "mock").lower()
 
 
-def get_order(order_id: str) -> Optional[dict]:
-    return _backend().get_order(order_id)
+@_guard
+def get_order(order_id: str, user_id: Optional[str] = None) -> Optional[dict]:
+    return _backend().get_order(order_id, user_id)
 
 
+@_guard
 def add_ticket(subject: str, detail: str, priority: str = "normal",
-               escalated: bool = False, order_id: Optional[str] = None) -> dict:
+               escalated: bool = False, order_id: Optional[str] = None,
+               user_id: Optional[str] = None) -> dict:
     return _backend().add_ticket(subject=subject, detail=detail, priority=priority,
-                                 escalated=escalated, order_id=order_id)
+                                 escalated=escalated, order_id=order_id,
+                                 user_id=user_id)
 
 
+@_guard
+def seed_demo_orders(user_id: str) -> list[dict]:
+    return _backend().seed_demo_orders(user_id)
+
+
+@_guard
 def list_tickets() -> list[dict]:
     return _backend().list_tickets()
 
 
+@_guard
 def search_kb(query: str) -> list[dict]:
     return _backend().search_kb(query)
 
 
+@_guard
 def get_session(session_id: str) -> list[dict]:
     return _backend().get_session(session_id)
 
 
+@_guard
 def save_session(session_id: str, messages: list[dict]) -> None:
     return _backend().save_session(session_id, messages)
 
 
+@_guard
 def clear_session(session_id: str) -> None:
     return _backend().clear_session(session_id)
 

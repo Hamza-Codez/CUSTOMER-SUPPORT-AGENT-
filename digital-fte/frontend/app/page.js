@@ -1,12 +1,16 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowUp, RotateCcw } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { AlertTriangle, ArrowRight, ArrowUp, RotateCcw } from "lucide-react";
 
-import { streamChat } from "./api";
+import { AuthError, fetchMe, streamChat } from "./api";
+import { isSignedIn } from "./auth";
 import { loadSessionId, resetSessionId } from "./session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 // The agent's actions, named for a customer rather than for a developer.
@@ -18,29 +22,52 @@ const TOOL_LABELS = {
   escalate_to_human: "Escalated to a human",
 };
 
-const SUGGESTIONS = [
-  "How long does shipping take?",
-  "Track ORD-1001",
-  "Refund ORD-1002, arrived damaged",
-  "Refund ORD-1003",
-];
-
 const GREETING = {
   role: "agent",
   text: "Hi — I'm your support agent. Ask about products, shipping or warranty, track an order, or request a refund.",
   tools: [],
 };
 
+/** Suggestions built from the user's OWN orders, so every one of them works. */
+function suggestionsFor(orders) {
+  const refundable = orders.find((o) => o.refundable);
+  const blocked = orders.find((o) => !o.refundable);
+  return [
+    "How long does shipping take?",
+    orders[0] && `Track ${orders[0].order_id}`,
+    refundable && `Refund ${refundable.order_id}, arrived damaged`,
+    blocked && `Refund ${blocked.order_id}`,
+  ].filter(Boolean);
+}
+
 export default function ChatPage() {
+  const router = useRouter();
   const [sessionId, setSessionId] = useState(null);
+  const [me, setMe] = useState(null);
   const [messages, setMessages] = useState([GREETING]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState(null);
+  const [actedOnce, setActedOnce] = useState(false);
   const endRef = useRef(null);
   const inputRef = useRef(null);
 
-  useEffect(() => setSessionId(loadSessionId()), []);
+  // Gate: no session, no chat. The backend would refuse anyway (401) — this
+  // just avoids showing a chat box that can't work.
+  useEffect(() => {
+    if (!isSignedIn()) {
+      router.replace("/signin");
+      return;
+    }
+    setSessionId(loadSessionId());
+    fetchMe()
+      .then(setMe)
+      .catch((e) => {
+        if (e instanceof AuthError) router.replace("/signin");
+        else setError(e.message);
+      });
+  }, [router]);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, streaming]);
@@ -71,47 +98,58 @@ export default function ChatPage() {
             patch((msg) => ({ ...msg, text: msg.text + event.text }));
           } else if (event.type === "tool") {
             patch((msg) => ({ ...msg, tools: [...msg.tools, event.name] }));
+            if (event.name !== "search_kb") setActedOnce(true);
           } else if (event.type === "error") {
             setError(event.detail);
             patch((msg) => ({ ...msg, failed: true }));
           }
         });
       } catch (e) {
+        if (e instanceof AuthError) {
+          router.replace("/signin");
+          return;
+        }
         setError(e.message);
         patch((msg) => ({ ...msg, failed: true }));
       } finally {
         setStreaming(false);
-        // Drop the placeholder if the stream produced nothing at all.
         setMessages((m) =>
           m.filter((msg, i) => i !== index || msg.text || msg.tools.length)
         );
         inputRef.current?.focus();
       }
     },
-    [input, streaming, sessionId]
+    [input, streaming, sessionId, router]
   );
 
   function startOver() {
     setSessionId(resetSessionId());
     setMessages([GREETING]);
     setError(null);
+    setActedOnce(false);
     inputRef.current?.focus();
   }
 
+  const suggestions = me ? suggestionsFor(me.orders) : [];
+
   return (
     <div className="flex h-[calc(100vh-9rem)] flex-col">
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
-          {SUGGESTIONS.map((s) => (
-            <button
-              key={s}
-              onClick={() => send(s)}
-              disabled={streaming || !sessionId}
-              className="rounded-full border border-base-line bg-base-800 px-3 py-1 text-xs text-ink-muted transition-colors hover:border-accent-600 hover:text-accent-400 disabled:opacity-40"
-            >
-              {s}
-            </button>
-          ))}
+          {me
+            ? suggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => send(s)}
+                  disabled={streaming}
+                  className="rounded-full border border-base-line bg-base-800 px-3 py-1 text-xs text-ink-muted transition-colors hover:border-accent-600 hover:text-accent-400 disabled:opacity-40"
+                >
+                  {s}
+                </button>
+              ))
+            : [56, 92, 120].map((w) => (
+                <Skeleton key={w} className="h-6 rounded-full" style={{ width: w }} />
+              ))}
         </div>
         <Button
           variant="ghost"
@@ -135,6 +173,26 @@ export default function ChatPage() {
         {streaming && !messages[messages.length - 1]?.text && <TypingIndicator />}
         <div ref={endRef} />
       </div>
+
+      {/* Onboarding closes once the agent has completed one real action.
+          Agents get the dashboard link; customers can't open it (403), so they
+          get the confirmation without a link that would refuse them. */}
+      {actedOnce && (
+        me?.user.role === "agent" ? (
+          <Link
+            href="/tickets"
+            className="mt-3 flex items-center justify-between rounded-xl border border-accent-700/50 bg-accent-soft px-3 py-2 text-sm text-accent-400 transition-colors hover:border-accent-600"
+          >
+            That action was logged — see the ticket it just created
+            <ArrowRight className="h-4 w-4" aria-hidden />
+          </Link>
+        ) : (
+          <p className="mt-3 rounded-xl border border-accent-700/50 bg-accent-soft px-3 py-2 text-sm text-accent-400">
+            That action was logged to your account. A support agent can see it on
+            their dashboard.
+          </p>
+        )
+      )}
 
       {error && (
         <p

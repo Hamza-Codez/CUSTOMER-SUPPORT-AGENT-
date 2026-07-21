@@ -13,10 +13,11 @@ from fastapi.testclient import TestClient
 
 import main
 import store
+from authed import authed_client, session_key
 from main import app
 from store import mock_store
 
-client = TestClient(app)
+client = authed_client(app)
 
 # `stream_mode="messages"` yields tool results too. If any of these reach the
 # customer, the endpoint is forwarding chunks it should have filtered.
@@ -132,4 +133,4 @@ def test_agent_failure_arrives_as_an_error_frame_not_an_http_error(monkeypatch):
     assert "temporarily unavailable" in errors[0]["detail"]
     assert "model exploded" not in json.dumps(frames)   # no internals leaked
     assert only(frames, "done") == []
-    assert store.get_session("boom") == []             # failed turn not retained
+    assert store.get_session(session_key("boom")) == []             # failed turn not retained

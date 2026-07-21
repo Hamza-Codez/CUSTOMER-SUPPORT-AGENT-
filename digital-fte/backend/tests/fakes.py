@@ -21,17 +21,30 @@ _PG_ORDERS = [
      "items": ["AeroDesk Standing Desk (oak)"], "total": "499.00",
      "status": "shipped", "carrier": "DHL", "tracking": "DHL-88231145",
      "eta": (datetime.now(timezone.utc) + timedelta(days=2)).strftime("%Y-%m-%d"),
-     "refundable": True},
+     "refundable": True, "user_id": None},
     {"order_id": "ORD-1002", "customer": "Priya Nair",
      "items": ["AeroChair Ergonomic Chair"], "total": "329.00",
      "status": "delivered", "carrier": "FedEx", "tracking": "FDX-55190022",
      "eta": (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d"),
-     "refundable": True},
+     "refundable": True, "user_id": None},
     {"order_id": "ORD-1003", "customer": "Sam Okoro",
      "items": ["AeroDesk Standing Desk (walnut)", "AeroChair Ergonomic Chair"],
      "total": "828.00", "status": "processing", "carrier": None, "tracking": None,
      "eta": (datetime.now(timezone.utc) + timedelta(days=6)).strftime("%Y-%m-%d"),
-     "refundable": False},
+     "refundable": False, "user_id": None},
+]
+
+
+_SEED_TEMPLATES = [
+    {"customer": "You", "items": ["AeroDesk Standing Desk (oak)"], "total": "499.00",
+     "status": "shipped", "carrier": "DHL", "tracking": "DHL-88231145",
+     "refundable": True, "_eta_days": 2},
+    {"customer": "You", "items": ["AeroChair Ergonomic Chair"], "total": "329.00",
+     "status": "delivered", "carrier": "FedEx", "tracking": "FDX-55190022",
+     "refundable": True, "_eta_days": -1},
+    {"customer": "You", "items": ["AeroDesk Standing Desk (walnut)"], "total": "828.00",
+     "status": "processing", "carrier": None, "tracking": None,
+     "refundable": False, "_eta_days": 6},
 ]
 
 
@@ -121,9 +134,11 @@ class _Rpc:
         self._params = params
 
     def execute(self):
-        if self._name != "match_kb_docs":
-            raise KeyError(f"No such RPC: {self._name}")
-        return _Result(self._db.match_kb_docs(**self._params))
+        if self._name == "match_kb_docs":
+            return _Result(self._db.match_kb_docs(**self._params))
+        if self._name == "seed_demo_orders":
+            return _Result(self._db.seed_demo_orders(**self._params))
+        raise KeyError(f"No such RPC: {self._name}")
 
 
 class FakeSupabase:
@@ -131,6 +146,7 @@ class FakeSupabase:
 
     def __init__(self, kb_docs):
         self._ticket_seq = itertools.count(1)
+        self._order_seq = itertools.count(2001)
         self.tables = {
             "orders": [dict(o) for o in _PG_ORDERS],
             "tickets": [],
@@ -168,6 +184,20 @@ class FakeSupabase:
                 return stored
         self.tables[table].append(stored)
         return stored
+
+    def seed_demo_orders(self, p_user_id):
+        """Mirrors the plpgsql function in 0004: idempotent, ids from a sequence."""
+        mine = [o for o in self.tables["orders"] if o.get("user_id") == p_user_id]
+        if not mine:
+            for template in _SEED_TEMPLATES:
+                row = dict(template)
+                row["order_id"] = f"ORD-{next(self._order_seq):04d}"
+                row["user_id"] = p_user_id
+                row["eta"] = (datetime.now(timezone.utc)
+                              + timedelta(days=row.pop("_eta_days"))).strftime("%Y-%m-%d")
+                self.tables["orders"].append(row)
+            mine = [o for o in self.tables["orders"] if o.get("user_id") == p_user_id]
+        return copy.deepcopy(sorted(mine, key=lambda o: o["order_id"]))
 
     def match_kb_docs(self, query_embedding, match_count=3, min_similarity=0.05):
         scored = []

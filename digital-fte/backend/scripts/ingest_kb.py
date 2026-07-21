@@ -17,6 +17,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import config  # noqa: E402,F401  — loads .env
+
 import embeddings                       # noqa: E402
 from store import mock_store            # noqa: E402
 from store import supabase_store        # noqa: E402
@@ -42,7 +44,18 @@ def main() -> int:
 
     for start in range(0, len(rows), BATCH):
         chunk = rows[start:start + BATCH]
-        client.table("kb_docs").upsert(chunk, on_conflict="title").execute()
+        try:
+            client.table("kb_docs").upsert(chunk, on_conflict="title").execute()
+        except Exception as exc:
+            code = getattr(exc, "code", "")
+            if code in ("PGRST205", "42P01"):
+                print("\nThe kb_docs table does not exist yet. Run the migrations "
+                      "in the Supabase SQL Editor first:", file=sys.stderr)
+                print("  db/migrations/0001_init.sql", file=sys.stderr)
+                print("  db/migrations/0002_seed_orders.sql", file=sys.stderr)
+                print("  db/migrations/0003_sessions.sql", file=sys.stderr)
+                return 1
+            raise
         print(f"  upserted {start + len(chunk)}/{len(rows)}")
 
     print(f"Done. kb_docs now serves {len(rows)} documents.")

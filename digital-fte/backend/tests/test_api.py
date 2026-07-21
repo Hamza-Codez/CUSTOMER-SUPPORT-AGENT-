@@ -14,10 +14,11 @@ from fastapi.testclient import TestClient
 import main
 import model
 import store
+from authed import authed_client, session_key
 from main import app
 from store import mock_store
 
-client = TestClient(app)
+client = authed_client(app)
 
 # Internal plumbing that must never surface in a customer-facing reply.
 REPLY_LEAKS = ["here's what i found", "[refund policy]", "[shipping times]",
@@ -38,7 +39,7 @@ def chat(message: str, session_id: str = "test") -> str:
 
 def test_health_reports_the_live_provider_and_store():
     body = client.get("/health").json()
-    assert body == {"status": "ok", "provider": "mock", "data": "mock"}
+    assert body == {"status": "ok", "provider": "mock", "data": "mock", "auth": "mock"}
 
 
 def test_chat_response_shape_matches_the_spec():
@@ -119,7 +120,7 @@ def test_scenario_ticket_log_is_newest_first_and_correctly_shaped():
     tickets = client.get("/tickets").json()["tickets"]
     assert [t["id"] for t in tickets] == ["TCK-0002", "TCK-0001"]   # newest first
     assert set(tickets[0]) == {"id", "subject", "detail", "priority", "escalated",
-                               "order_id", "status", "created_at"}
+                               "order_id", "user_id", "status", "created_at"}
 
 
 # --- failure paths -----------------------------------------------------------
@@ -140,7 +141,48 @@ def test_agent_failure_returns_a_clean_500_envelope(monkeypatch):
     assert response.status_code == 500
     assert "temporarily unavailable" in response.json()["detail"]
     assert "model exploded" not in response.text          # no internals leaked
-    assert store.get_session("boom") == []                # failed turn not retained
+    assert store.get_session(session_key("boom")) == []                # failed turn not retained
+
+
+class _FakeApiError(Exception):
+    """Shaped like postgrest.exceptions.APIError: carries a `code`."""
+    def __init__(self, code):
+        super().__init__(f"Could not find the table 'public.tickets'")
+        self.code = code
+
+
+def test_an_unprovisioned_database_returns_503_with_instructions(monkeypatch):
+    """A missing table used to escape as a raw 500 with a stack trace."""
+    monkeypatch.setattr(mock_store, "list_tickets",
+                        lambda: (_ for _ in ()).throw(_FakeApiError("PGRST205")))
+
+    response = client.get("/tickets")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "0001_init.sql" in detail
+    assert "DATA_BACKEND=mock" in detail
+    assert "Traceback" not in response.text
+
+
+def test_an_unreachable_database_returns_503_without_leaking_internals(monkeypatch):
+    monkeypatch.setattr(mock_store, "list_tickets",
+                        lambda: (_ for _ in ()).throw(OSError("connection refused to 10.0.0.5")))
+
+    response = client.get("/tickets")
+
+    assert response.status_code == 503
+    assert "unavailable" in response.json()["detail"]
+    assert "10.0.0.5" not in response.text        # no host details leaked
+
+
+def test_chat_survives_an_unprovisioned_database(monkeypatch):
+    monkeypatch.setattr(mock_store, "get_session",
+                        lambda _s: (_ for _ in ()).throw(_FakeApiError("PGRST205")))
+
+    response = client.post("/chat", json={"message": "hi", "session_id": "s"})
+    assert response.status_code == 503
+    assert "0001_init.sql" in response.json()["detail"]
 
 
 def test_unknown_provider_raises_a_clear_value_error(monkeypatch):
@@ -155,16 +197,16 @@ def test_sessions_do_not_leak_into_each_other():
     chat("what is your refund policy", "alice")
     chat("what is your warranty", "bob")
 
-    alice = json.dumps(store.get_session("alice"))
+    alice = json.dumps(store.get_session(session_key("alice")))
     assert "warranty" not in alice.lower()
-    assert store.get_session("bob")
+    assert store.get_session(session_key("bob"))
 
 
 def test_memory_accumulates_within_one_session():
     chat("what is your refund policy", "memo")
-    first = len(store.get_session("memo"))
+    first = len(store.get_session(session_key("memo")))
     chat("what about shipping times", "memo")
-    assert len(store.get_session("memo")) > first
+    assert len(store.get_session(session_key("memo"))) > first
 
 
 @pytest.fixture(autouse=True)

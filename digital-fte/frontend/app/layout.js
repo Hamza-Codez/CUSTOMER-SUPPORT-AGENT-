@@ -1,6 +1,6 @@
 import Link from "next/link";
 import "./globals.css";
-import { NavLink } from "./nav-link";
+import { Nav } from "./nav";
 
 export const metadata = {
   title: "Digital FTE — Support Agent",
@@ -22,10 +22,7 @@ export default function RootLayout({ children }) {
               </span>
               <span className="text-sm font-semibold tracking-tight">Support Agent</span>
             </Link>
-            <nav className="flex items-center gap-1 text-sm">
-              <NavLink href="/">Chat</NavLink>
-              <NavLink href="/tickets">Tickets</NavLink>
-            </nav>
+            <Nav />
           </div>
         </header>
         <main className="mx-auto max-w-3xl px-6 py-6">{children}</main>

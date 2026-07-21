@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+import context
 import store
 
 
@@ -25,6 +26,7 @@ def _escalate(summary: str, order_id: str | None = None) -> dict:
         priority="high",
         escalated=True,
         order_id=order_id or None,
+        user_id=context.current_user_id(),
     )
 
 
@@ -52,7 +54,7 @@ def search_kb(query: str) -> str:
 @tool
 def track_order(order_id: str) -> str:
     """Look up the status of an order by its ID (e.g. 'ORD-1001')."""
-    order = store.get_order(order_id)
+    order = store.get_order(order_id, context.current_user_id())
     if not order:
         # A bad ID is usually a typo, not a handoff — ask, don't escalate.
         return (f"I couldn't find an order with ID '{order_id}'. "
@@ -75,7 +77,7 @@ def process_refund(order_id: str, reason: str) -> str:
     An out-of-policy order is refused and escalated by this tool itself — relay
     its answer and do NOT escalate again.
     """
-    order = store.get_order(order_id)
+    order = store.get_order(order_id, context.current_user_id())
     if not order:
         return (f"I couldn't find an order with ID '{order_id}', so I can't refund it. "
                 f"Please double-check the ID — it looks like 'ORD-1001'.")
@@ -98,6 +100,7 @@ def process_refund(order_id: str, reason: str) -> str:
         detail=f"Refund of ${order['total']:.2f} approved. Reason: {reason}",
         priority="normal",
         order_id=order["order_id"],
+        user_id=context.current_user_id(),
     )
     return (f"Refund of ${order['total']:.2f} approved for {order['order_id']}. "
             f"Logged as ticket {ticket['id']}. Funds arrive in 5-7 business days.")
@@ -106,7 +109,8 @@ def process_refund(order_id: str, reason: str) -> str:
 @tool
 def create_ticket(subject: str, detail: str, priority: str = "normal") -> str:
     """Create a support ticket to track an issue. Priority: low | normal | high."""
-    ticket = store.add_ticket(subject=subject, detail=detail, priority=priority)
+    ticket = store.add_ticket(subject=subject, detail=detail, priority=priority,
+                              user_id=context.current_user_id())
     return f"Created ticket {ticket['id']} ({priority} priority): {subject}"
 
 

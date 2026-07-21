@@ -2,7 +2,10 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Inbox, ShieldAlert } from "lucide-react";
 
-import { fetchTickets } from "../api";
+import { useRouter } from "next/navigation";
+
+import { AuthError, fetchTickets } from "../api";
+import { isSignedIn } from "../auth";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -10,11 +13,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 const POLL_MS = 3000;
 
 export default function TicketsPage() {
+  const router = useRouter();
   const [tickets, setTickets] = useState(null);   // null = still loading
   const [error, setError] = useState(null);
+  const [denied, setDenied] = useState(false);
 
   useEffect(() => {
+    if (!isSignedIn()) {
+      router.replace("/signin");
+      return;
+    }
+
     let alive = true;
+    let timer;      // declared first: load() clears it on a 403
 
     async function load() {
       try {
@@ -22,19 +33,44 @@ export default function TicketsPage() {
         if (!alive) return;
         setTickets(data.tickets);
         setError(null);
-      } catch {
+      } catch (e) {
         if (!alive) return;
-        setError("Can't reach the backend — is it running on :8000?");
+        if (e instanceof AuthError && e.status === 403) {
+          // Authenticated, wrong role. Stop polling — retrying can't fix it.
+          setDenied(true);
+          setTickets([]);
+          alive = false;
+          clearInterval(timer);
+        } else if (e instanceof AuthError) {
+          router.replace("/signin");
+        } else {
+          setError("Can't reach the backend — is it running on :8000?");
+        }
       }
     }
 
     load();
-    const timer = setInterval(load, POLL_MS);
+    timer = setInterval(load, POLL_MS);
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, []);
+  }, [router]);
+
+  if (denied) {
+    return (
+      <Card>
+        <CardBody className="flex flex-col items-center gap-2 py-12 text-center">
+          <ShieldAlert className="h-6 w-6 text-high-fg" aria-hidden />
+          <p className="text-sm font-medium">Support agents only</p>
+          <p className="max-w-sm text-sm text-ink-muted">
+            The audit log contains other customers' order details, so it's
+            restricted to the support team. You're signed in as a customer.
+          </p>
+        </CardBody>
+      </Card>
+    );
+  }
 
   const escalated = tickets?.filter((t) => t.escalated).length ?? 0;
 

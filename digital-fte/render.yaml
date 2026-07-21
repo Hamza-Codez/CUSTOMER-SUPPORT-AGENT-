@@ -1,0 +1,44 @@
+# Render blueprint for the FastAPI backend.
+#   Render dashboard → New → Blueprint → point at this repo.
+#
+# Everything defaults to the zero-setup providers, so the service boots and
+# answers /health before you have added a single secret. Switch it to the real
+# stack by filling in the vars marked sync:false in the Render dashboard.
+services:
+  - type: web
+    name: digital-fte-api
+    runtime: python
+    rootDir: digital-fte/backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+      # --- providers: change these to go live ---
+      - key: MODEL_PROVIDER
+        value: mock          # -> openai once OPENAI_API_KEY is set
+      - key: DATA_BACKEND
+        value: mock          # -> supabase once the schema and keys are in place
+      - key: AUTH_PROVIDER
+        value: mock          # -> supabase once SUPABASE_JWT_SECRET is set
+      - key: EMBEDDING_PROVIDER
+        value: mock          # -> openai for real semantic retrieval
+      - key: EMBEDDING_DIM
+        value: "1536"
+
+      # --- secrets: set these in the dashboard, never in this file ---
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # Tighten this to your Vercel URL once the frontend is deployed.
+      - key: ALLOWED_ORIGINS
+        value: "*"

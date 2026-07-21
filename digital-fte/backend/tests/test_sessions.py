@@ -13,11 +13,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import store
+from authed import authed_client, session_key
 from fakes import FakeSupabase
 from main import app
 from store import mock_store, supabase_store
 
-client = TestClient(app)
+client = authed_client(app)
 
 
 @pytest.fixture(autouse=True)
@@ -46,28 +47,28 @@ def test_the_api_module_no_longer_owns_conversation_state():
 def test_a_turn_is_written_to_the_store():
     chat("what is your refund policy", "s1")
 
-    stored = store.get_session("s1")
+    stored = store.get_session(session_key("s1"))
     assert stored, "the turn was not persisted"
     assert "refund policy" in json.dumps(stored).lower()
 
 
 def test_memory_accumulates_across_turns():
     chat("what is your refund policy", "s1")
-    first = len(store.get_session("s1"))
+    first = len(store.get_session(session_key("s1")))
     chat("how long does shipping take", "s1")
-    assert len(store.get_session("s1")) > first
+    assert len(store.get_session(session_key("s1"))) > first
 
 
 def test_sessions_are_isolated():
     chat("what is your refund policy", "alice")
     chat("what is the warranty", "bob")
 
-    assert "warranty" not in json.dumps(store.get_session("alice")).lower()
-    assert "refund" not in json.dumps(store.get_session("bob")).lower()
+    assert "warranty" not in json.dumps(store.get_session(session_key("alice"))).lower()
+    assert "refund" not in json.dumps(store.get_session(session_key("bob"))).lower()
 
 
 def test_an_unknown_session_starts_empty():
-    assert store.get_session("never-seen") == []
+    assert store.get_session(session_key("never-seen")) == []
 
 
 # --- durability --------------------------------------------------------------
@@ -76,24 +77,24 @@ def test_memory_survives_rebuilding_the_api_layer():
     """Stand-in for a restart: reload the API module and the agent singleton.
     Memory is in the store, so the conversation is still there afterwards."""
     chat("what is your refund policy", "durable")
-    before = store.get_session("durable")
+    before = store.get_session(session_key("durable"))
 
     import agent
     import main
     agent._agent = None
     importlib.reload(main)
 
-    assert store.get_session("durable") == before
-    assert TestClient(main.app).post(
+    assert store.get_session(session_key("durable")) == before
+    assert authed_client(main.app).post(
         "/chat", json={"message": "and shipping?", "session_id": "durable"}
     ).status_code == 200
-    assert len(store.get_session("durable")) > len(before)
+    assert len(store.get_session(session_key("durable"))) > len(before)
 
 
 def test_stored_messages_round_trip_through_json():
     """The Supabase column is jsonb — anything that won't serialise is lost."""
     chat("refund ORD-1002, it arrived damaged", "json")
-    stored = store.get_session("json")
+    stored = store.get_session(session_key("json"))
 
     assert json.loads(json.dumps(stored)) == stored
     kinds = {m["type"] for m in stored}
@@ -104,9 +105,9 @@ def test_clear_session_removes_only_that_session():
     chat("what is your refund policy", "keep")
     chat("what is your refund policy", "drop")
 
-    store.clear_session("drop")
-    assert store.get_session("drop") == []
-    assert store.get_session("keep")
+    store.clear_session(session_key("drop"))
+    assert store.get_session(session_key("drop")) == []
+    assert store.get_session(session_key("keep"))
 
 
 # --- backend parity ----------------------------------------------------------

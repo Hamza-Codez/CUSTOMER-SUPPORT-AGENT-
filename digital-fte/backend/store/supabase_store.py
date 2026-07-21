@@ -67,6 +67,7 @@ def _to_order(row: dict) -> dict:
         "tracking": row.get("tracking"),
         "eta": str(row["eta"])[:10] if row.get("eta") else None,
         "refundable": bool(row["refundable"]),
+        "user_id": row.get("user_id"),
     }
 
 
@@ -83,6 +84,7 @@ def _to_ticket(row: dict) -> dict:
         "priority": row["priority"],
         "escalated": bool(row["escalated"]),
         "order_id": row.get("order_id"),
+        "user_id": row.get("user_id"),
         "status": row["status"],
         "created_at": created + "Z",
     }
@@ -90,17 +92,43 @@ def _to_ticket(row: dict) -> dict:
 
 # --- the frozen interface ----------------------------------------------------
 
-def get_order(order_id: str) -> Optional[dict]:
+def get_order(order_id: str, user_id: Optional[str] = None) -> Optional[dict]:
     rows = (get_client().table("orders")
             .select("*")
             .eq("order_id", order_id.strip().upper())
             .limit(1)
             .execute()).data
-    return _to_order(rows[0]) if rows else None
+    if not rows:
+        return None
+
+    order = _to_order(rows[0])
+    owner = order.get("user_id")
+    if owner is not None and owner != user_id:
+        # Someone else's order is reported as "not found", never as "forbidden":
+        # a 403 here would confirm the id exists and leak the ordering pattern.
+        return None
+    return order
+
+
+def seed_demo_orders(user_id: str) -> list[dict]:
+    """Give a new signup their own copy of the demo orders (onboarding).
+
+    Ids come from the `demo_order_seq` sequence created in migration 0004, so
+    they are unique across users and `order_id` stays the primary key.
+    """
+    existing = (get_client().table("orders").select("*")
+                .eq("user_id", user_id).execute()).data
+    if existing:
+        return sorted((_to_order(r) for r in existing), key=lambda o: o["order_id"])
+
+    rows = (get_client().rpc("seed_demo_orders", {"p_user_id": user_id})
+            .execute()).data or []
+    return sorted((_to_order(r) for r in rows), key=lambda o: o["order_id"])
 
 
 def add_ticket(subject: str, detail: str, priority: str = "normal",
-               escalated: bool = False, order_id: Optional[str] = None) -> dict:
+               escalated: bool = False, order_id: Optional[str] = None,
+               user_id: Optional[str] = None) -> dict:
     # `id` and `created_at` are omitted on purpose — Postgres generates both, so
     # concurrent workers can't collide on a TCK number.
     rows = (get_client().table("tickets")
@@ -110,6 +138,7 @@ def add_ticket(subject: str, detail: str, priority: str = "normal",
                 "priority": priority,
                 "escalated": escalated,
                 "order_id": order_id,
+                "user_id": user_id,
             })
             .execute()).data
     if not rows:

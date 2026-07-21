@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["MODEL_PROVIDER"] = "mock"
 os.environ.setdefault("DATA_BACKEND", "mock")
 os.environ.setdefault("EMBEDDING_PROVIDER", "mock")
+os.environ.setdefault("AUTH_PROVIDER", "mock")
 # The mock model paces its simulated stream for demos; tests want it instant.
 os.environ.setdefault("MOCK_STREAM_DELAY_MS", "0")
 
