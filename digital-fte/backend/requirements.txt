@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+langgraph>=0.2.50
+langchain-core>=0.3.0
+# Provider extras (install what you use):
+langchain-openai>=0.2.0   # for MODEL_PROVIDER=openai
+langchain-ollama>=0.2.0   # for MODEL_PROVIDER=ollama
+# Tests (run on MODEL_PROVIDER=mock — no API key needed):
+pytest>=8.0
+httpx>=0.27               # required by fastapi.testclient
