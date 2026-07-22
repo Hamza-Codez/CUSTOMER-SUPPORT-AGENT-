@@ -92,6 +92,28 @@ cover the guardrails (both refund paths, KB miss, escalation), the streaming
 contract, per-user isolation, auth 401/403, and **run the same assertions
 against both the mock and Supabase backends**.
 
+## Point it at your own documents
+
+The knowledge base is a folder of Markdown, not code:
+
+```
+digital-fte/backend/db/knowledge/
+  refund-policy.md      shipping-times.md      warranty.md
+  product-aerodesk.md   product-aerochair.md
+```
+
+Replace those with your real FAQ, policy and product docs. `# Heading` names a
+document; each `## Heading` becomes its own retrievable passage titled
+"Document — Section", so an answer can say where it came from. Long sections
+split on paragraph boundaries — a whole document as one vector retrieves badly,
+because the one relevant paragraph gets averaged away.
+
+The mock backend picks up changes on restart. On Supabase, re-run
+`scripts/ingest_kb.py` to re-embed.
+
+Anything the docs don't cover, the agent refuses and escalates. That refusal is
+the feature — it's what stops invented policy.
+
 ## Going live
 
 **Database + real retrieval** — create a Supabase project, then:

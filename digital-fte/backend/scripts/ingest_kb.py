@@ -3,8 +3,8 @@
     cd backend
     DATA_BACKEND=supabase EMBEDDING_PROVIDER=mock python scripts/ingest_kb.py
 
-Source documents are `store.mock_store.KNOWLEDGE_BASE`, so both backends serve
-the same content. Re-running is safe: rows upsert on `title`.
+Source documents are the files in `db/knowledge/`, so both backends serve the
+same content. Re-running is safe: rows upsert on `title`.
 
 Switching EMBEDDING_PROVIDER later means re-running this — old vectors were
 produced by a different model and are not comparable to new query embeddings.
@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config  # noqa: E402,F401  — loads .env
 
 import embeddings                       # noqa: E402
+import knowledge                        # noqa: E402
 from store import mock_store            # noqa: E402
 from store import supabase_store        # noqa: E402
 
@@ -27,7 +28,8 @@ BATCH = 32
 
 
 def main() -> int:
-    docs = mock_store.KNOWLEDGE_BASE
+    docs = knowledge.load_documents() or mock_store._FALLBACK_KNOWLEDGE
+    print(f"Source: {knowledge.describe_source()}")
     provider = embeddings.provider_name()
     dim = embeddings.embedding_dim()
 

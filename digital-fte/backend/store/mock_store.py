@@ -8,6 +8,8 @@ from __future__ import annotations
 import copy
 import itertools
 import re
+
+import knowledge
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -17,10 +19,14 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-# --- Knowledge base (stands in for the pgvector store) -----------------------
-# The same five documents seed `kb_docs` in Supabase, so the demo is identical
+# --- Knowledge base ----------------------------------------------------------
+# Loaded from real documents in `db/knowledge/` — edit those files, not this
+# list. The same passages seed `kb_docs` in Supabase, so the demo is identical
 # on both backends and any behaviour change is provably the swap, not content.
-KNOWLEDGE_BASE = [
+#
+# The literal below is only a fallback for an empty/missing folder, so the app
+# still runs end to end out of the box.
+_FALLBACK_KNOWLEDGE = [
     {
         "title": "Shipping times",
         "body": "Standard shipping takes 3-5 business days. Express shipping takes "
@@ -49,6 +55,17 @@ KNOWLEDGE_BASE = [
                 "manufacturing defects.",
     },
 ]
+
+# Real documents win; the literal above is only used if the folder is empty.
+KNOWLEDGE_BASE = knowledge.load_documents() or _FALLBACK_KNOWLEDGE
+
+
+def reload_knowledge() -> int:
+    """Re-read db/knowledge/ without restarting. Returns the passage count."""
+    global KNOWLEDGE_BASE
+    KNOWLEDGE_BASE = knowledge.load_documents() or _FALLBACK_KNOWLEDGE
+    return len(KNOWLEDGE_BASE)
+
 
 # --- Orders ------------------------------------------------------------------
 # `user_id: None` marks a shared demo fixture — the three canonical orders the
