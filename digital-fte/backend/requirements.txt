@@ -8,6 +8,7 @@ langchain-core>=0.3.0
 langchain-openai>=0.2.0   # for MODEL_PROVIDER=openai / EMBEDDING_PROVIDER=openai
 langchain-ollama>=0.2.0   # for MODEL_PROVIDER=ollama / EMBEDDING_PROVIDER=ollama
 supabase>=2.0             # for DATA_BACKEND=supabase
+psycopg[binary]>=3.1      # for scripts/apply_schema.py (DDL needs real Postgres)
 pyjwt>=2.8                # for AUTH_PROVIDER=supabase
 # Tests (run on MODEL_PROVIDER=mock — no API key needed):
 pytest>=8.0

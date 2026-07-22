@@ -49,6 +49,40 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def _announce_providers():
+    """Say plainly which providers are live.
+
+    A mock provider must never be mistaken for the real thing: the mock model is
+    keyword routing, not reasoning, and the mock store forgets everything on
+    restart. If any of these are on, the log says so on every boot.
+    """
+    live = {
+        "model": os.getenv("MODEL_PROVIDER", "mock"),
+        "data": store.backend_name(),
+        "auth": auth.provider_name(),
+        "embeddings": os.getenv("EMBEDDING_PROVIDER", "mock"),
+    }
+    mocked = [name for name, value in live.items() if value == "mock"]
+    summary = " · ".join(f"{k}={v}" for k, v in live.items())
+
+    if not mocked:
+        logger.warning("PRODUCTION providers: %s", summary)
+        return
+
+    logger.warning("=" * 68)
+    logger.warning(" NOT PRODUCTION — %s", summary)
+    logger.warning(" Mocked: %s", ", ".join(mocked))
+    if "model" in mocked:
+        logger.warning(" The mock model matches keywords; it does not reason.")
+        logger.warning("   -> MODEL_PROVIDER=ollama  (free: ollama pull llama3.1)")
+        logger.warning("   -> MODEL_PROVIDER=openai  (needs OPENAI_API_KEY)")
+    if "data" in mocked:
+        logger.warning(" The mock store loses every ticket on restart.")
+        logger.warning("   -> python scripts/apply_schema.py, then DATA_BACKEND=supabase")
+    logger.warning("=" * 68)
+
+
 @app.exception_handler(store.StoreUnavailable)
 def _store_unavailable(request: Request, exc: store.StoreUnavailable):
     """503, not 500: the app is fine, its database isn't reachable or set up.
