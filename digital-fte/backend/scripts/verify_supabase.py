@@ -49,6 +49,48 @@ def attempt(name: str, fn, *, hint: str = ""):
         return None
 
 
+def _diagnose_empty_search() -> str:
+    """Say WHY the KB looks empty, instead of guessing "run ingest_kb.py".
+
+    An empty result has two very different causes: nothing was loaded, or plenty
+    was loaded and the index never returns it. Telling them apart needs a look at
+    the raw rows and the unfiltered similarities.
+    """
+    from store import supabase_store
+    import embeddings
+
+    try:
+        client = supabase_store.get_client()
+        rows = client.table("kb_docs").select("id,embedding").execute().data or []
+    except Exception as exc:                        # noqa: BLE001
+        return f"could not read kb_docs ({type(exc).__name__})"
+
+    if not rows:
+        return "kb_docs is empty — run scripts/ingest_kb.py"
+
+    embedded = sum(1 for r in rows if r.get("embedding"))
+    if not embedded:
+        return f"{len(rows)} rows but no embeddings — re-run scripts/ingest_kb.py"
+
+    try:
+        raw = client.rpc("match_kb_docs", {
+            "query_embedding": embeddings.embed_query("what is your refund policy"),
+            "match_count": 5,
+            "min_similarity": -1.0,
+        }).execute().data or []
+    except Exception as exc:                        # noqa: BLE001
+        return f"match_kb_docs failed ({type(exc).__name__})"
+
+    if raw:
+        best = max(r["similarity"] for r in raw)
+        return (f"{embedded} embedded rows, best similarity {best:.3f} — below the "
+                f"0.05 threshold. Re-embed with the provider you query with.")
+
+    return (f"{embedded} embedded rows, but the RPC returns nothing even unfiltered "
+            f"— the vector index is not serving them. Apply "
+            f"db/migrations/0005_fix_vector_index.sql (python scripts/apply_schema.py).")
+
+
 def main() -> int:
     print(f"Backend: {store.backend_name()}\n")
 
@@ -67,7 +109,7 @@ def main() -> int:
     if docs is not None:
         check("kb_docs is queryable", True)
         check("vector search returns a hit", bool(docs),
-              "run scripts/ingest_kb.py" if not docs else docs[0]["title"])
+              docs[0]["title"] if docs else _diagnose_empty_search())
         check("a miss returns []", store.search_kb("do you offer gift wrapping") == [])
 
     print("\nTickets (audit trail)")
