@@ -1,0 +1,30 @@
+[project]
+name = "fte-backend"
+version = "0.1.0"
+description = "Digital FTE Agent Platform — FastAPI backend on the OpenAI Agents SDK"
+requires-python = ">=3.12"
+dependencies = [
+    "openai-agents>=0.18.3",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "asyncpg>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+    # Used by tests/test_postgres.py to read DATABASE_URL straight from .env,
+    # since conftest blanks it in the environment to keep the suite hermetic.
+    "python-dotenv>=1.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
