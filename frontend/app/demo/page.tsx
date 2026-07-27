@@ -25,8 +25,10 @@ import {
 import Link from "next/link";
 import * as React from "react";
 
+import { Wordmark } from "@/components/Brand";
 import { ChatWidget, type ChatHandle } from "@/components/ChatWidget";
 import { DecisionCardView } from "@/components/DecisionCardView";
+import { ToolRack } from "@/components/ToolRack";
 import { EmailPreviewPanel } from "@/components/demo/EmailPreviewPanel";
 import { OpsPeek } from "@/components/demo/OpsPeek";
 import { STEPS, type Side } from "@/components/demo/steps";
@@ -43,7 +45,8 @@ import {
   DEMO_OPERATOR_TOKEN,
   api,
 } from "@/lib/api";
-import type { DecisionCard } from "@/lib/types";
+import { toolForKind, type ToolId } from "@/lib/tools";
+import type { ChatResponse, DecisionCard } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const DEMO_QUICK_REPLIES = [
@@ -75,6 +78,7 @@ export default function DemoPage() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [cards, setCards] = React.useState<DecisionCard[]>([]);
+  const [used, setUsed] = React.useState<Set<ToolId>>(() => new Set());
   const chat = React.useRef<ChatHandle | null>(null);
 
   const step = STEPS[index];
@@ -170,9 +174,18 @@ export default function DemoPage() {
     markDone(); // ops peek and the closing step are just "look at this"
   }
 
-  function onExchange() {
+  function onExchange(response: ChatResponse) {
     setBusy(false);
     markDone();
+    // A tool lights up in the rack only because the backend reported it acting.
+    setUsed((prev) => {
+      const next = new Set(prev);
+      for (const action of response.actions) {
+        const tool = toolForKind(action.kind);
+        if (tool) next.add(tool.id);
+      }
+      return next;
+    });
   }
 
   function restart() {
@@ -183,15 +196,10 @@ export default function DemoPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-ink">
-      <header className="border-b border-line bg-surface/70 backdrop-blur">
+      <header className="border-b border-line bg-surface/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
-          <Link href="/" className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/15 text-[13px] font-bold text-accent">
-              F
-            </span>
-            <span className="hidden text-sm font-semibold text-fg sm:inline">
-              Demo playground
-            </span>
+          <Link href="/">
+            <Wordmark />
           </Link>
 
           <SideToggle side={side} onChange={setSide} />
@@ -223,13 +231,21 @@ export default function DemoPage() {
         {/* The stage — always the real component, never a mock-up. */}
         <section className="flex min-h-0 flex-1 flex-col border-line lg:border-r">
           {side === "customer" ? (
-            <ChatWidget
-              sessionId={sessionId}
-              token={DEMO_CUSTOMER_TOKEN}
-              quickReplies={DEMO_QUICK_REPLIES}
-              onExchange={onExchange}
-              ref={chat}
-            />
+            <div className="flex min-h-0 flex-1">
+              <div className="min-w-0 flex-1">
+                <ChatWidget
+                  sessionId={sessionId}
+                  token={DEMO_CUSTOMER_TOKEN}
+                  quickReplies={DEMO_QUICK_REPLIES}
+                  onExchange={onExchange}
+                  ref={chat}
+                />
+              </div>
+              {/* What it can reach, lighting up as it reaches. */}
+              <aside className="hidden w-64 shrink-0 overflow-y-auto border-l border-line bg-surface/40 px-4 py-5 xl:block">
+                <ToolRack used={used} working={busy} />
+              </aside>
+            </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
               {step.id === "ops" || completed["ops"] ? (
@@ -390,14 +406,14 @@ function SideToggle({
   onChange: (s: Side) => void;
 }) {
   const options: { id: Side; label: string; icon: React.ReactNode }[] = [
-    { id: "customer", label: "Customer", icon: <Headphones size={13} /> },
-    { id: "seller", label: "Seller", icon: <SlidersHorizontal size={13} /> },
+    { id: "customer", label: "Storefront", icon: <Headphones size={13} /> },
+    { id: "seller", label: "Your desk", icon: <SlidersHorizontal size={13} /> },
   ];
   return (
     <div
       role="tablist"
-      aria-label="View mode"
-      className="ml-2 flex rounded-xl border border-line bg-raised p-0.5"
+      aria-label="View"
+      className="ml-2 flex rounded-xl border border-line bg-raised p-0.5 shadow-[inset_0_1px_2px_rgb(0_0_0/0.3)]"
     >
       {options.map((o) => (
         <button
@@ -407,7 +423,9 @@ function SideToggle({
           onClick={() => onChange(o.id)}
           className={cn(
             "flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition",
-            side === o.id ? "bg-accent text-white" : "text-muted hover:text-fg",
+            side === o.id
+              ? "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)]"
+              : "text-muted hover:text-fg",
           )}
         >
           {o.icon}

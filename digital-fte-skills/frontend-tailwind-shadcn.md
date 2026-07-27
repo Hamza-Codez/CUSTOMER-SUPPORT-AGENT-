@@ -19,8 +19,44 @@ marketing pages for SEO/GEO/AEO.
 6. **Accessible by default.** Keyboard send, focus rings, aria labels, sufficient contrast (mind contrast on dark purple/zinc).
 
 ## Instructions
+### Frontend Design Rulings — Apple-Inspired Premium Theme
 
-### Step 1: Set design tokens once
+#### Visual Language & Styling
+- Build entirely with **Tailwind CSS** — utility classes drive styling, spacing, and responsive behavior throughout; no ad-hoc inline styles.
+- Draw core visual inspiration from **Apple.com**: restrained typography, generous whitespace, purposeful motion, and confident negative space over decoration.
+- Avoid generic, overly-rounded "bubbly" buttons or default UI-kit visuals — the aesthetic should feel precise, curated, and premium, never templated.
+- Use a **tiered corner-radius system** for hierarchy: cards stay squarish with minimal or no border; buttons use a defined radius scale (`rounded-xl` for primary CTAs, `rounded-lg` for secondary, `rounded-md` for compact/inline actions). Let spacing, shadow, and contrast define edges rather than heavy borders.
+
+#### Color & Gradients
+- **Hero and Pricing sections** run a dark theme built from **black, magenta, and gray** — layered as smooth, multi-stop gradients rather than flat two-tone transitions, for a polished, "pro studio" feel.
+- Gradients should feel deliberate: soft diagonal or radial blends, gentle light bleed at the edges, no harsh banding or oversaturation.
+- Keep color and contrast consistent across every surface — cards, chat interface, navigation, and footer should read as one continuous system, not disconnected sections.
+
+#### Typography
+- Choose a font pairing capable of both large display headlines and dense body copy without losing clarity (e.g. a geometric/humanist sans like Inter or a comparable SF Pro-style alternative).
+- Maintain strict visual parity across all typographic contexts — headings, cards, chat text, nav labels, and footer links should share the same type scale and weight logic.
+
+#### Decorative Detail
+- Introduce subtle embedded line patterns or hand-drawn-but-refined motifs as background texture — abstract, minimal, and purposeful, never busy or distracting.
+- Reserve these accents for reinforcing key sections (hero backdrop, dividers) rather than using them as standalone decoration.
+
+#### Layout & Responsiveness
+- Design **mobile-first**: every component is authored for small viewports first, then scaled up — not retrofitted afterward.
+- Component architecture must stay visually and structurally consolidated on mobile — no cramped stacking or broken alignment; the same intentionality applied on desktop should carry through to the smallest breakpoint.
+
+#### Content Strategy
+- Present product specs and feature details with a clear narrative structure — grouped, scannable sections rather than dense text blocks or raw spec dumps.
+- Apply a mindful content hierarchy: lead with value, support with detail, and let visual rhythm (spacing, contrast, motion) guide the eye down the page.
+
+#### Motion, Navigation & Flow
+- Scrolling must be smooth and glitch-free — no jank, layout shift, or scroll-jacking that breaks reading rhythm.
+- Page navigation and routing should feel instant and predictable — every transition reinforces the user's sense of where they are, never interrupts it.
+- The end-to-end user flow — landing → exploring features → conversion — must feel seamless, with no friction points or dead ends.
+
+#### Onboarding
+- Onboarding is frictionless by design: minimal required steps, clear progressive disclosure, and no unnecessary gates between a new user and their first meaningful action.
+
+#### Step 1: Set design tokens once
 Define in `globals.css` / Tailwind config and reuse everywhere:
 - Purple accent + zinc neutrals + black base; a subtle gradient system.
 - Semantic colors for priority (high/escalated = warm alert; normal = success).

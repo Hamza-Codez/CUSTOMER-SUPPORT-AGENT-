@@ -1,8 +1,9 @@
 "use client";
 
-import { Inbox, RefreshCw, Star } from "lucide-react";
+import { Inbox, RefreshCw } from "lucide-react";
 import * as React from "react";
 
+import { AnalyticsPanel } from "@/components/AnalyticsPanel";
 import { DecisionCardView } from "@/components/DecisionCardView";
 import {
   Button,
@@ -12,11 +13,10 @@ import {
   Skeleton,
 } from "@/components/ui/primitives";
 import { ApiError, api } from "@/lib/api";
-import type { DecisionCard, FeedbackSummary } from "@/lib/types";
+import type { DecisionCard } from "@/lib/types";
 
 export function SellerView() {
   const [cards, setCards] = React.useState<DecisionCard[] | null>(null);
-  const [csat, setCsat] = React.useState<FeedbackSummary | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -31,14 +31,10 @@ export function SellerView() {
 
     async function fetchQueue() {
       try {
-        const [queue, feedback] = await Promise.all([
-          api.escalations(),
-          api.feedback(),
-        ]);
+        const queue = await api.escalations();
         if (cancelled) return;
         setError(null);
         setCards(queue.escalations);
-        setCsat(feedback);
       } catch (e) {
         if (cancelled) return;
         setError(
@@ -100,23 +96,8 @@ export function SellerView() {
         </Button>
       </div>
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-3">
-        <Stat label="Awaiting you" value={cards ? String(pending.length) : null} />
-        <Stat
-          label="Satisfaction"
-          value={
-            csat
-              ? csat.average_rating !== null
-                ? `${csat.average_rating} / 5`
-                : "No replies yet"
-              : null
-          }
-          icon={csat?.average_rating ? <Star size={13} /> : undefined}
-        />
-        <Stat
-          label="Feedback replies"
-          value={csat ? String(csat.responses) : null}
-        />
+      <div className="mb-5">
+        <AnalyticsPanel />
       </div>
 
       {notice && (
@@ -175,28 +156,3 @@ export function SellerView() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  icon,
-}: {
-  label: string;
-  value: string | null;
-  icon?: React.ReactNode;
-}) {
-  return (
-    <Card className="p-4">
-      <p className="mb-1.5 text-[11px] uppercase tracking-wider text-faint">
-        {label}
-      </p>
-      {value === null ? (
-        <Skeleton className="h-6 w-20" />
-      ) : (
-        <p className="flex items-center gap-1.5 text-lg font-semibold text-fg">
-          {icon && <span className="text-accent">{icon}</span>}
-          {value}
-        </p>
-      )}
-    </Card>
-  );
-}

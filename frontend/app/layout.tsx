@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
+import { brand } from "@/lib/brand";
+
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -10,13 +12,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://digital-fte.example.com"),
+  metadataBase: new URL(`https://${brand.domain}`),
   title: {
-    default: "Digital FTE — an AI employee for your storefront",
-    template: "%s · Digital FTE",
+    default: `${brand.name} — ${brand.tagline}`,
+    template: `%s · ${brand.name}`,
   },
-  description:
-    "Hire a digital full-time employee for e-commerce support. It reads your real orders and your own written policies, resolves what it can, and hands money-moving decisions to a human with one click.",
+  description: brand.promise,
   keywords: [
     "AI customer support agent",
     "ecommerce support automation",
@@ -26,10 +27,10 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     type: "website",
-    title: "Digital FTE — an AI employee for your storefront",
+    title: `${brand.name} — ${brand.tagline}`,
     description:
       "Grounded in your real records and your own policies. Routine work handled, risky calls prepared for a human.",
-    siteName: "Digital FTE",
+    siteName: brand.name,
   },
   robots: { index: true, follow: true },
 };

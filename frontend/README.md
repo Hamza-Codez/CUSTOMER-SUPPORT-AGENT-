@@ -38,6 +38,7 @@ it. Flip the toggle to **Seller** and the Decision Card is already waiting.
 | `/login` | client | Role gateway into the demo |
 | `/dashboard` | client, gated | The dual customer/seller dashboard |
 | `/demo` | client | The guided playground — the ten-step tour |
+| `/integrations` | client | The guided embed request (SPEC §16.1) |
 
 ## Layout
 
@@ -78,7 +79,7 @@ lib/
 
 ## Verified
 
-- `npm run build` — clean, all seven routes prerendered, TypeScript passes.
+- `npm run build` — clean, all eight routes prerendered, TypeScript passes.
 - **The demo tour's exact API sequence replayed against the live backend**: all
   ten steps produce their expected outcome, including the identity gate
   withholding data, the small refund executing, the large one pausing, approval

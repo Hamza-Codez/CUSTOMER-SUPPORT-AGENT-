@@ -2,17 +2,33 @@ import {
   ArrowRight,
   BadgeCheck,
   BookOpen,
+  Boxes,
   Clock,
-  MessagesSquare,
-  ShieldCheck,
-  Wrench,
+  Lock,
+  PackageSearch,
+  Route,
+  ShieldAlert,
+  Undo2,
 } from "lucide-react";
 import Link from "next/link";
 
+import { Mark } from "@/components/Brand";
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
+import { brand, voice } from "@/lib/brand";
+import { TOOLS, type ToolId } from "@/lib/tools";
 
-/* Server-rendered and static: this page is the pitch and needs to stay
+/* Static and server-rendered: this page is the pitch and needs to stay
  * indexable, so nothing here is a client component. */
+
+const TOOL_ICONS: Record<ToolId, React.ReactNode> = {
+  route: <Route size={15} />,
+  order_lookup: <PackageSearch size={15} />,
+  policy_retriever: <BookOpen size={15} />,
+  product_catalog: <Boxes size={15} />,
+  refund_processor: <Undo2 size={15} />,
+  human_escalation: <ShieldAlert size={15} />,
+  send_summary_email: <BadgeCheck size={15} />,
+};
 
 export default function HomePage() {
   return (
@@ -20,156 +36,192 @@ export default function HomePage() {
       <SiteHeader />
 
       <main className="flex-1">
-        <section className="surface-gradient border-b border-line px-4 py-20 sm:px-6 sm:py-28">
-          <div className="mx-auto max-w-3xl text-center">
-            <span className="mb-5 inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/10 px-3 py-1 text-[12px] text-accent-soft">
-              <BadgeCheck size={12} /> Grounded in your data, not the model&apos;s
-              guesses
-            </span>
-            <h1 className="text-balance text-4xl font-semibold leading-[1.1] tracking-tight text-fg sm:text-5xl">
-              Hire a digital employee for your storefront
-            </h1>
-            <p className="mx-auto mt-5 max-w-xl text-pretty text-[15px] leading-relaxed text-muted sm:text-base">
-              Not a chatbot that answers questions. An employee that does the
-              job: it reads your real orders, applies your own written policies,
-              settles what it can, and prepares the rest for you to approve in
-              one click.
-            </p>
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-              <Link
-                href="/demo"
-                className="inline-flex h-12 items-center gap-2 rounded-xl bg-accent px-6 text-[15px] font-medium text-white transition hover:bg-accent-soft"
-              >
-                Try the demo <ArrowRight size={16} />
-              </Link>
-              <Link
-                href="/features"
-                className="inline-flex h-12 items-center rounded-xl border border-line px-6 text-[15px] text-body transition hover:border-accent/50"
-              >
-                See features
-              </Link>
+        {/* Hero */}
+        <section className="aura relative overflow-hidden border-b border-line px-5 pb-20 pt-20 sm:pb-28 sm:pt-28">
+          <div className="grid-field pointer-events-none absolute inset-0 opacity-40" />
+          <div className="relative mx-auto max-w-5xl">
+            <div className="mx-auto max-w-2xl text-center">
+              <span className="mb-6 inline-flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.08] px-3 py-1.5 text-[12px] text-accent-soft">
+                <BadgeCheck size={12} /> {voice.grounded}
+              </span>
+              <h1 className="text-title text-gradient sm:text-display">
+                {voice.notAChatbot}
+              </h1>
+              <p className="mx-auto mt-5 max-w-xl text-pretty text-[15.5px] leading-relaxed text-muted">
+                {brand.promise}
+              </p>
+              <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
+                <Link
+                  href="/demo"
+                  className="inline-flex h-12 items-center gap-2 rounded-xl bg-accent px-6 text-[15px] font-medium text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22),0_8px_28px_-10px_rgb(168_85_247/0.7)] transition hover:bg-accent-soft active:translate-y-px"
+                >
+                  Watch it work <ArrowRight size={16} />
+                </Link>
+                <Link
+                  href="/signup"
+                  className="inline-flex h-12 items-center rounded-xl border border-line bg-raised px-6 text-[15px] text-body transition hover:border-line-lit"
+                >
+                  Create an account
+                </Link>
+              </div>
+              <p className="mt-4 text-[12px] text-faint">
+                No card. The demo needs no account at all.
+              </p>
+            </div>
+
+            {/* The moment that sells it, shown rather than described. */}
+            <div className="panel-raised mx-auto mt-16 max-w-3xl overflow-hidden rounded-2xl">
+              <div className="h-px hairline" />
+              <div className="grid divide-y divide-line md:grid-cols-2 md:divide-x md:divide-y-0">
+                <div className="p-6">
+                  <p className="text-label mb-3 uppercase text-faint">
+                    What the customer sees
+                  </p>
+                  <div className="flex gap-3">
+                    <Mark size={24} className="mt-0.5 shrink-0" />
+                    <p className="text-[13.5px] leading-relaxed text-body">
+                      &ldquo;I&apos;ve passed this to a colleague to review, because
+                      it needs a person to sign it off. I haven&apos;t taken any
+                      money-related action in the meantime.&rdquo;
+                    </p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <Chip tone="neutral">Routed to Refunds</Chip>
+                    <Chip tone="ok">Policy cited</Chip>
+                    <Chip tone="warn">Waiting for approval</Chip>
+                  </div>
+                </div>
+
+                <div className="p-6">
+                  <p className="text-label mb-3 uppercase text-faint">
+                    What you see, at the same moment
+                  </p>
+                  <p className="text-[13.5px] font-medium text-fg">
+                    Refund 149.00 — ORD-1001
+                  </p>
+                  <p className="mt-1 text-[12.5px] text-muted">
+                    Ayesha K. · verified by order and email
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <Chip tone="warn">
+                      <Clock size={10} /> Above the automatic limit
+                    </Chip>
+                  </div>
+                  <div className="mt-4 flex gap-2">
+                    <span className="rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white">
+                      Approve
+                    </span>
+                    <span className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-muted">
+                      Decline
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
-        <Section
-          eyebrow="The problem"
-          title="Generic bots make support worse"
-          lead="They invent answers, cannot touch a real order, and cannot take a single meaningful action. The customer ends up waiting for a human anyway — after being told something untrue."
-        >
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Point title="Invents answers">
-              Confident, wrong policy is worse than no answer at all.
-            </Point>
-            <Point title="Cannot act">
-              No order lookup, no refund, no escalation with context.
-            </Point>
-            <Point title="Escalates blind">
-              A human inherits a transcript and starts from nothing.
-            </Point>
-          </div>
-        </Section>
+        {/* The tools — the thing that makes it an employee rather than a box */}
+        <section className="border-b border-line px-5 py-20">
+          <div className="mx-auto max-w-5xl">
+            <p className="text-label mb-3 uppercase text-accent">
+              What it can actually do
+            </p>
+            <h2 className="max-w-2xl text-title text-fg">
+              Seven capabilities, three of which it is not allowed to use alone
+            </h2>
+            <p className="mb-10 mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
+              A chatbot has a prompt. This has tools — the only door between the
+              model and your data, each one audited, and the ones that move money
+              gated in code rather than in an instruction.
+            </p>
 
-        <Section
-          eyebrow="How it works"
-          title="Specialists, not one do-everything bot"
-          lead="A coordinator reads what the customer wants and hands it to the right specialist. Each one has a tight job, a small set of tools, and rules it cannot talk its way around."
-          alt
-        >
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Feature icon={<MessagesSquare size={16} />} title="Orders">
-              Verifies identity before revealing anything, then reports real
-              status, carrier and ETA.
-            </Feature>
-            <Feature icon={<BookOpen size={16} />} title="Support">
-              Answers from your written policy and cites the passage. No source,
-              no claim.
-            </Feature>
-            <Feature icon={<Wrench size={16} />} title="Products">
-              Explains and compares what you actually stock, including when
-              something is out of it.
-            </Feature>
-            <Feature icon={<ShieldCheck size={16} />} title="Refunds">
-              Applies your policy, settles the small and recent ones, escalates
-              the rest.
-            </Feature>
-          </div>
-        </Section>
-
-        <Section
-          eyebrow="The dual dashboard"
-          title="See both sides of the conversation"
-          lead="One window, two lenses. Watch the FTE stop short of a refund it should not make on its own, flip to the seller view, and find the decision already prepared and waiting."
-        >
-          <div className="overflow-hidden rounded-2xl border border-line bg-surface">
-            <div className="h-px hairline" />
-            <div className="grid divide-y divide-line sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-              <div className="p-5">
-                <p className="mb-2 text-[11px] uppercase tracking-wider text-faint">
-                  Customer view
-                </p>
-                <p className="text-[13px] leading-relaxed text-body">
-                  &ldquo;I&apos;ve passed this to a colleague to review, because
-                  it needs a person to sign it off. I haven&apos;t taken any
-                  money-related action in the meantime.&rdquo;
-                </p>
-              </div>
-              <div className="p-5">
-                <p className="mb-2 text-[11px] uppercase tracking-wider text-faint">
-                  Seller view
-                </p>
-                <p className="mb-2 text-[13px] leading-relaxed text-body">
-                  Refund 149.00 for ORD-1001 — customer verified.
-                </p>
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-warn/25 bg-warn/10 px-2.5 py-1 text-[11px] text-warn">
-                  <Clock size={11} /> Above the automatic refund limit
-                </span>
-              </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {TOOLS.map((tool) => (
+                <div
+                  key={tool.id}
+                  className="panel group rounded-2xl p-5 transition hover:border-accent/30"
+                >
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-raised text-accent-soft transition group-hover:border-accent/40 group-hover:bg-accent/12">
+                      {TOOL_ICONS[tool.id]}
+                    </span>
+                    <span className="text-[13.5px] font-medium text-fg">
+                      {tool.name}
+                    </span>
+                    {tool.gated && (
+                      <span
+                        title="Gated — enforced in code"
+                        className="ml-auto text-faint"
+                      >
+                        <Lock size={11} />
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[12.5px] leading-relaxed text-muted">
+                    {tool.blurb}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
-        </Section>
+        </section>
 
-        <Section
-          eyebrow="Why you can trust it"
-          title="Controls in code, not in a prompt"
-          lead="A prompt is a request, and a request can be declined. The limits that matter are enforced outside the model, where nothing can argue with them."
-          alt
-        >
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Point title="Identity first">
-              Nothing about an account is revealed until the order and email
-              match.
-            </Point>
-            <Point title="Money is human-owned">
-              Above your cap or outside your window, the run pauses for a person.
-            </Point>
-            <Point title="Everything is logged">
-              Every sensitive read and write, including the refusals.
-            </Point>
+        {/* Why it can be trusted */}
+        <section className="border-b border-line bg-surface/30 px-5 py-20">
+          <div className="mx-auto max-w-5xl">
+            <p className="text-label mb-3 uppercase text-accent">
+              Why it can be trusted
+            </p>
+            <h2 className="max-w-2xl text-title text-fg">
+              Controls in code, not in a prompt
+            </h2>
+            <p className="mb-10 mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
+              A prompt is a request, and a request can be declined. We watched a
+              model ignore an explicit instruction and invent product prices — so
+              the limits that matter live where nothing can argue with them.
+            </p>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Pillar title="Identity before data">
+                Nothing about an account appears until the order number and the
+                email on it match. Checked in the tool, not the prompt.
+              </Pillar>
+              <Pillar title="Money is yours">
+                Above your cap, outside your window, or not yet delivered — it
+                stops and prepares the decision instead.
+              </Pillar>
+              <Pillar title="No source, no claim">
+                An answer that cannot be traced to one of your documents is
+                withheld before the customer sees it.
+              </Pillar>
+            </div>
           </div>
-        </Section>
+        </section>
 
-        <section className="border-t border-line px-4 py-20 sm:px-6">
+        {/* Close */}
+        <section className="px-5 py-24">
           <div className="mx-auto max-w-2xl text-center">
-            <h2 className="text-2xl font-semibold tracking-tight text-fg sm:text-3xl">
-              A full-time employee for the price of lunch
+            <Mark size={40} className="mx-auto mb-6" />
+            <h2 className="text-title text-fg">
+              Easier to believe once you&apos;ve watched it
             </h2>
             <p className="mx-auto mt-3 max-w-md text-[15px] leading-relaxed text-muted">
-              From 20 a month. Full frontline support, with a human on the calls
-              that matter.
+              Ask it for a refund it shouldn&apos;t approve, then flip to the
+              seller&apos;s side and find the decision already waiting for you.
             </p>
-            <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-              <Link
-                href="/pricing"
-                className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-medium text-white transition hover:bg-accent-soft"
-              >
-                See pricing <ArrowRight size={15} />
-              </Link>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Link
                 href="/demo"
-                className="inline-flex h-11 items-center rounded-xl border border-line px-5 text-sm text-body transition hover:border-accent/50"
+                className="inline-flex h-12 items-center gap-2 rounded-xl bg-accent px-6 text-[15px] font-medium text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)] transition hover:bg-accent-soft"
               >
-                Try the demo
+                Try the demo <ArrowRight size={16} />
+              </Link>
+              <Link
+                href="/pricing"
+                className="inline-flex h-12 items-center rounded-xl border border-line px-6 text-[15px] text-body transition hover:border-line-lit"
+              >
+                See pricing
               </Link>
             </div>
           </div>
@@ -181,40 +233,28 @@ export default function HomePage() {
   );
 }
 
-function Section({
-  eyebrow,
-  title,
-  lead,
+function Chip({
+  tone,
   children,
-  alt = false,
 }: {
-  eyebrow: string;
-  title: string;
-  lead: string;
+  tone: "neutral" | "ok" | "warn";
   children: React.ReactNode;
-  alt?: boolean;
 }) {
+  const tones = {
+    neutral: "border-line bg-raised text-muted",
+    ok: "border-ok/25 bg-ok/[0.08] text-ok",
+    warn: "border-warn/25 bg-warn/[0.08] text-warn",
+  };
   return (
-    <section
-      className={`border-b border-line px-4 py-16 sm:px-6 ${alt ? "bg-surface/30" : ""}`}
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium ${tones[tone]}`}
     >
-      <div className="mx-auto max-w-5xl">
-        <p className="mb-2 text-[11px] uppercase tracking-wider text-accent">
-          {eyebrow}
-        </p>
-        <h2 className="max-w-2xl text-2xl font-semibold tracking-tight text-fg sm:text-3xl">
-          {title}
-        </h2>
-        <p className="mb-8 mt-3 max-w-2xl text-pretty text-[15px] leading-relaxed text-muted">
-          {lead}
-        </p>
-        {children}
-      </div>
-    </section>
+      {children}
+    </span>
   );
 }
 
-function Point({
+function Pillar({
   title,
   children,
 }: {
@@ -222,31 +262,9 @@ function Point({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-line bg-surface p-5">
-      <p className="mb-1.5 text-sm font-medium text-fg">{title}</p>
+    <div className="panel rounded-2xl p-5">
+      <p className="mb-2 text-[14px] font-medium text-fg">{title}</p>
       <p className="text-[13px] leading-relaxed text-muted">{children}</p>
-    </div>
-  );
-}
-
-function Feature({
-  icon,
-  title,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex gap-3.5 rounded-2xl border border-line bg-surface p-5">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent/12 text-accent">
-        {icon}
-      </span>
-      <div>
-        <p className="mb-1 text-sm font-medium text-fg">{title}</p>
-        <p className="text-[13px] leading-relaxed text-muted">{children}</p>
-      </div>
     </div>
   );
 }

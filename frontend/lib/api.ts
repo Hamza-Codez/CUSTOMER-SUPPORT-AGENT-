@@ -7,10 +7,15 @@
  */
 
 import type {
+  Account,
+  Analytics,
+  AuthResponse,
   ChatResponse,
   DecisionResponse,
   EmailPreview,
   EscalationList,
+  IntegrationAccepted,
+  IntegrationRequestBody,
   FeedbackSummary,
   Health,
   Overview,
@@ -21,6 +26,7 @@ export const API_BASE =
 
 const TOKEN_KEY = "fte.token";
 const ROLE_KEY = "fte.role";
+const ACCOUNT_KEY = "fte.account";
 
 /** Thrown for any non-2xx, carrying the backend's `detail` when it sent one. */
 export class ApiError extends Error {
@@ -42,14 +48,27 @@ export function getRole(): string | null {
   return window.localStorage.getItem(ROLE_KEY);
 }
 
-export function signIn(token: string, role: string) {
+export function getAccount(): Account | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(ACCOUNT_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Account;
+  } catch {
+    return null;
+  }
+}
+
+export function signIn(token: string, role: string, account?: Account) {
   window.localStorage.setItem(TOKEN_KEY, token);
   window.localStorage.setItem(ROLE_KEY, role);
+  if (account) window.localStorage.setItem(ACCOUNT_KEY, JSON.stringify(account));
 }
 
 export function signOut() {
-  window.localStorage.removeItem(TOKEN_KEY);
-  window.localStorage.removeItem(ROLE_KEY);
+  for (const key of [TOKEN_KEY, ROLE_KEY, ACCOUNT_KEY]) {
+    window.localStorage.removeItem(key);
+  }
 }
 
 async function request<T>(
@@ -103,6 +122,27 @@ export const DEMO_CUSTOMER_TOKEN = "demo-token";
 export const DEMO_OPERATOR_TOKEN = "ops-token";
 
 export const api = {
+  signup: (body: {
+    business_name: string;
+    name: string;
+    email: string;
+    password: string;
+  }) => request<AuthResponse>("/auth/signup", { method: "POST", body, token: null }),
+
+  login: (body: { email: string; password: string }) =>
+    request<AuthResponse>("/auth/login", { method: "POST", body, token: null }),
+
+  me: (token?: string) => request<Account>("/auth/me", token ? { token } : {}),
+
+  onboardingContext: (
+    policies: { topic: string; body: string }[],
+    token?: string,
+  ) =>
+    request<{ passages: number; source_refs: string[]; message: string }>(
+      "/onboarding/context",
+      { method: "POST", body: { policies }, ...(token ? { token } : {}) },
+    ),
+
   health: () => request<Health>("/health", { token: null }),
 
   chat: (message: string, sessionId: string, token?: string) =>
@@ -138,6 +178,16 @@ export const api = {
 
   overview: (token?: string) =>
     request<Overview>("/dashboard/overview", token ? { token } : {}),
+
+  analytics: (token?: string) =>
+    request<Analytics>("/dashboard/analytics", token ? { token } : {}),
+
+  requestIntegration: (body: IntegrationRequestBody, token?: string) =>
+    request<IntegrationAccepted>("/integrations/request", {
+      method: "POST",
+      body,
+      ...(token ? { token } : {}),
+    }),
 
   emailPreview: (sessionId: string, token?: string) =>
     request<EmailPreview>(

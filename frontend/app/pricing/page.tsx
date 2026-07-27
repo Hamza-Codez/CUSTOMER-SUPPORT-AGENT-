@@ -3,11 +3,11 @@ import { Check, Minus } from "lucide-react";
 import Link from "next/link";
 
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
+import { brand } from "@/lib/brand";
 
 export const metadata: Metadata = {
   title: "Pricing",
-  description:
-    "Two plans for the Digital FTE. Core at 20 a month for hosted frontline support; Pro adds embedding on your own site, higher automation limits and team seats.",
+  description: `Two plans for ${brand.name}. Core at 20 a month for hosted frontline support; Pro adds embedding on your own site, higher automation limits and team seats.`,
 };
 
 /* SPEC §16 leaves the Pro price and the conversation allowances open, so they
@@ -39,9 +39,10 @@ export default function PricingPage() {
     <>
       <SiteHeader />
       <main className="flex-1">
-        <section className="surface-gradient border-b border-line px-4 py-16 sm:px-6 sm:py-20">
-          <div className="mx-auto max-w-2xl text-center">
-            <h1 className="text-balance text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
+        <section className="aura relative overflow-hidden border-b border-line px-5 py-16 sm:py-20">
+          <div className="grid-field pointer-events-none absolute inset-0 opacity-40" />
+          <div className="relative mx-auto max-w-2xl text-center">
+            <h1 className="text-title text-gradient sm:text-display">
               A full-time employee for the price of lunch
             </h1>
             <p className="mx-auto mt-4 max-w-lg text-pretty text-[15px] leading-relaxed text-muted">
@@ -51,7 +52,7 @@ export default function PricingPage() {
           </div>
         </section>
 
-        <section className="border-b border-line px-4 py-14 sm:px-6">
+        <section className="border-b border-line px-5 py-14">
           <div className="mx-auto grid max-w-3xl gap-4 sm:grid-cols-2">
             <Plan
               name="Core"
@@ -68,22 +69,21 @@ export default function PricingPage() {
               yearly="yearly discount available"
               blurb="Growing stores that want it embedded and automating more."
               cta="Request access"
+              href="/integrations"
               featured
               note="Proposed — final pricing follows model-cost testing."
             />
           </div>
         </section>
 
-        <section className="px-4 py-14 sm:px-6">
+        <section className="px-5 py-14">
           <div className="mx-auto max-w-3xl">
-            <h2 className="mb-6 text-xl font-semibold tracking-tight text-fg">
-              What is in each plan
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-line bg-surface">
+            <h2 className="mb-6 text-heading text-fg">What is in each plan</h2>
+            <div className="panel overflow-hidden rounded-2xl">
               <div className="h-px hairline" />
               <table className="w-full text-left text-[13px]">
                 <thead>
-                  <tr className="border-b border-line text-[11px] uppercase tracking-wider text-faint">
+                  <tr className="text-label border-b border-line uppercase text-faint">
                     <th className="px-4 py-3 font-medium sm:px-5">Feature</th>
                     <th className="w-28 px-3 py-3 font-medium sm:w-40">Core</th>
                     <th className="w-28 px-3 py-3 font-medium sm:w-40">Pro</th>
@@ -140,6 +140,7 @@ function Plan({
   yearly,
   blurb,
   cta,
+  href = "/demo",
   featured = false,
   note,
 }: {
@@ -149,32 +150,33 @@ function Plan({
   yearly: string;
   blurb: string;
   cta: string;
+  href?: string;
   featured?: boolean;
   note?: string;
 }) {
   return (
     <div
-      className={`overflow-hidden rounded-2xl border bg-surface ${
-        featured ? "border-accent/40" : "border-line"
+      className={`overflow-hidden rounded-2xl ${
+        featured
+          ? "panel-raised border-accent/40 shadow-glow"
+          : "panel"
       }`}
     >
       {featured && <div className="h-px hairline" />}
       <div className="p-6">
         <p className="text-sm font-medium text-fg">{name}</p>
         <p className="mt-3 flex items-baseline gap-1.5">
-          <span className="text-3xl font-semibold tracking-tight text-fg">
-            {price}
-          </span>
+          <span className="text-title text-fg">{price}</span>
           <span className="text-[13px] text-faint">{cadence}</span>
         </p>
         <p className="mt-1 text-[12px] text-accent-soft">{yearly}</p>
         <p className="mt-4 text-[13px] leading-relaxed text-muted">{blurb}</p>
         <Link
-          href="/demo"
-          className={`mt-5 inline-flex h-10 w-full items-center justify-center rounded-xl text-sm font-medium transition ${
+          href={href}
+          className={`mt-5 inline-flex h-10 w-full items-center justify-center rounded-xl text-sm font-medium transition active:translate-y-px ${
             featured
-              ? "bg-accent text-white hover:bg-accent-soft"
-              : "border border-line text-body hover:border-accent/50"
+              ? "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)] hover:bg-accent-soft"
+              : "border border-line bg-raised text-body hover:border-line-lit"
           }`}
         >
           {cta}

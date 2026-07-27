@@ -1,37 +1,39 @@
 "use client";
 
-import { CornerDownLeft, RefreshCw } from "lucide-react";
+import { ArrowUp, RefreshCw } from "lucide-react";
 import * as React from "react";
 
 import { ActionChips } from "@/components/ActionChips";
-import { Button } from "@/components/ui/primitives";
+import { Mark } from "@/components/Brand";
 import { ApiError, api } from "@/lib/api";
+import { brand } from "@/lib/brand";
 import type { ChatResponse, Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** One-tap starters, so the first message is never a blank box. */
 const QUICK_REPLIES = [
-  "Where is my order ORD-1002? My email is ayesha.k@example.com",
-  "How long does dispatch take?",
-  "Compare the AeroDesk Pro and the AeroDesk Lite",
-  "I'd like a refund for ORD-1005, email ayesha.k@example.com",
+  { label: "Track an order", text: "Where is my order ORD-1002? My email is ayesha.k@example.com" },
+  { label: "Delivery times", text: "How long does dispatch take?" },
+  { label: "Compare desks", text: "Which is better, the AeroDesk Pro or the AeroDesk Lite?" },
+  { label: "Ask for a refund", text: "I'd like a refund for ORD-1005, email ayesha.k@example.com" },
 ];
 
-const QUICK_LABELS = [
-  "Track an order",
-  "Delivery times",
-  "Compare products",
-  "Request a refund",
+/** Shown in sequence while a turn is in flight.
+ *
+ * Honest about what it is: the backend answers a turn in one response rather
+ * than streaming its steps, so this narrates the shape of the work instead of
+ * claiming a specific tool is running right now. The chips that follow are the
+ * real record. */
+const WORKING_STAGES = [
+  "Reading the request",
+  "Choosing a specialist",
+  "Checking real records",
+  "Composing a reply",
 ];
 
 let counter = 0;
 const nextId = () => `m${++counter}`;
 
-/** Lets the guided tour drive this widget rather than reimplement it.
- *
- * The demo has to run the real chat surface against the real backend — a
- * scripted lookalike would prove nothing, which is the whole point of a demo on
- * seed data. */
 export type ChatHandle = { send: (text: string) => void };
 
 export function ChatWidget({
@@ -42,12 +44,9 @@ export function ChatWidget({
   ref,
 }: {
   sessionId: string;
-  /** Explicit token; the demo acts as the customer regardless of who signed in. */
   token?: string;
   quickReplies?: { label: string; text: string }[];
-  /** Fires after each completed turn, so the tour can advance on real results. */
   onExchange?: (response: ChatResponse) => void;
-  /** React 19 passes `ref` as a plain prop; no forwardRef needed. */
   ref?: React.Ref<ChatHandle>;
 }) {
   const [messages, setMessages] = React.useState<Message[]>([]);
@@ -80,12 +79,7 @@ export function ChatWidget({
       setMessages((prev) =>
         prev.map((m) =>
           m.id === placeholder.id
-            ? {
-                ...m,
-                pending: false,
-                text: response.reply,
-                actions: response.actions,
-              }
+            ? { ...m, pending: false, text: response.reply, actions: response.actions }
             : m,
         ),
       );
@@ -106,33 +100,15 @@ export function ChatWidget({
     }
   }
 
-  // Writing to a ref during render is not allowed — React may not have
-  // committed yet, and the value can be discarded. useImperativeHandle is the
-  // supported way to expose an action to a parent.
   React.useImperativeHandle(ref, () => ({ send }));
 
-  const chips =
-    quickReplies ??
-    QUICK_REPLIES.map((text, i) => ({ label: QUICK_LABELS[i], text }));
+  const chips = quickReplies ?? QUICK_REPLIES;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-        {messages.length === 0 ? (
-          <div className="mx-auto flex max-w-md flex-col items-center gap-2 pt-10 text-center">
-            <div className="mb-1 flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/12 text-accent">
-              <span className="text-lg font-semibold">F</span>
-            </div>
-            <h2 className="text-[15px] font-semibold text-fg">
-              Your digital employee is on shift
-            </h2>
-            <p className="text-[13px] leading-relaxed text-faint">
-              Ask about an order, a policy, a product, or a refund. Everything it
-              tells you comes from real records — never a guess.
-            </p>
-          </div>
-        ) : (
-          <div className="mx-auto flex max-w-2xl flex-col gap-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        {messages.length === 0 ? <Welcome /> : (
+          <div className="mx-auto flex max-w-2xl flex-col gap-5">
             {messages.map((message) => (
               <Bubble key={message.id} message={message} />
             ))}
@@ -141,7 +117,7 @@ export function ChatWidget({
         <div ref={endRef} />
       </div>
 
-      <div className="border-t border-line bg-surface/60 px-4 py-3 sm:px-6">
+      <div className="border-t border-line bg-surface/60 px-4 py-3.5 backdrop-blur sm:px-6">
         <div className="mx-auto max-w-2xl">
           <div className="mb-2.5 flex flex-wrap gap-1.5">
             {chips.map((chip) => (
@@ -150,8 +126,9 @@ export function ChatWidget({
                 onClick={() => send(chip.text)}
                 disabled={busy}
                 className={cn(
-                  "rounded-full border border-line bg-raised px-3 py-1.5 text-[12px] text-muted transition",
-                  "hover:border-accent/50 hover:text-fg disabled:opacity-40",
+                  "rounded-lg border border-line bg-raised/70 px-3 py-1.5 text-[12px] text-muted",
+                  "transition hover:border-accent/45 hover:text-fg active:translate-y-px",
+                  "disabled:opacity-40",
                 )}
               >
                 {chip.label}
@@ -164,29 +141,37 @@ export function ChatWidget({
               e.preventDefault();
               send(draft);
             }}
-            className="flex items-center gap-2"
+            className={cn(
+              "flex items-center gap-2 rounded-2xl border border-line bg-raised p-1.5",
+              "shadow-[inset_0_1px_2px_rgb(0_0_0/0.35)] transition focus-within:border-accent/50",
+            )}
           >
-            <div className="relative flex-1">
-              <input
-                ref={inputRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                disabled={busy}
-                placeholder="Ask about an order, a refund, a product…"
-                aria-label="Message"
-                className={cn(
-                  "h-11 w-full rounded-xl border border-line bg-raised pl-4 pr-10 text-sm text-fg",
-                  "placeholder:text-faint transition focus:border-accent/60 disabled:opacity-60",
-                )}
-              />
-              <CornerDownLeft
-                size={14}
-                className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-faint"
-              />
-            </div>
-            <Button type="submit" disabled={busy || !draft.trim()}>
-              {busy ? <RefreshCw size={15} className="animate-spin" /> : "Send"}
-            </Button>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              disabled={busy}
+              placeholder="Ask about an order, a refund, a product…"
+              aria-label="Message"
+              className="h-9 flex-1 bg-transparent px-3 text-sm text-fg outline-none placeholder:text-faint"
+            />
+            <button
+              type="submit"
+              disabled={busy || !draft.trim()}
+              aria-label="Send"
+              className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition",
+                "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)]",
+                "hover:bg-accent-soft active:translate-y-px",
+                "disabled:bg-elevated disabled:text-faint disabled:shadow-none",
+              )}
+            >
+              {busy ? (
+                <RefreshCw size={15} className="animate-spin" />
+              ) : (
+                <ArrowUp size={16} />
+              )}
+            </button>
           </form>
         </div>
       </div>
@@ -194,27 +179,49 @@ export function ChatWidget({
   );
 }
 
+function Welcome() {
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center pt-12 text-center">
+      <Mark size={44} className="mb-4" />
+      <h2 className="text-heading text-fg">Your employee is on shift</h2>
+      <p className="mt-2 text-[13.5px] leading-relaxed text-muted">
+        {brand.promise}
+      </p>
+      <p className="mt-4 text-[12px] text-faint">
+        Everything below the replies is a record of what it actually did.
+      </p>
+    </div>
+  );
+}
+
 function Bubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
 
+  if (isUser) {
+    return (
+      <div className="flex animate-rise justify-end">
+        <div className="max-w-[82%] rounded-2xl rounded-br-md border border-accent/25 bg-accent/[0.13] px-4 py-2.5 text-sm leading-relaxed text-fg">
+          {message.text}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      className={cn(
-        "flex animate-rise",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
-      <div className={cn("max-w-[85%]", isUser && "items-end")}>
+    <div className="flex animate-rise gap-3">
+      <span className="mt-0.5 shrink-0">
+        <Mark size={26} />
+      </span>
+      <div className="min-w-0 flex-1">
         <div
           className={cn(
-            "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-            isUser
-              ? "bg-accent/15 text-fg border border-accent/25"
-              : "border border-line bg-surface text-body",
-            message.failed && "border-alert/30 bg-alert/5 text-alert",
+            "rounded-2xl rounded-tl-md border px-4 py-2.5 text-sm leading-relaxed",
+            message.failed
+              ? "border-alert/30 bg-alert/[0.06] text-alert"
+              : "border-line bg-surface text-body",
           )}
         >
-          {message.pending ? <Typing /> : message.text}
+          {message.pending ? <Working /> : message.text}
         </div>
         {message.actions && <ActionChips actions={message.actions} />}
       </div>
@@ -222,16 +229,42 @@ function Bubble({ message }: { message: Message }) {
   );
 }
 
-function Typing() {
+/** The waiting state, narrating the shape of the work rather than pretending to
+ * know which tool is running. The chips afterwards are the real record. */
+function Working() {
+  const [stage, setStage] = React.useState(0);
+
+  React.useEffect(() => {
+    const timer = setInterval(
+      () => setStage((s) => Math.min(s + 1, WORKING_STAGES.length - 1)),
+      900,
+    );
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <span className="flex items-center gap-1 py-1" aria-label="Thinking">
-      {[0, 1, 2].map((i) => (
+    <div className="flex flex-col gap-2 py-0.5">
+      <div className="flex items-center gap-2">
+        <span className="flex items-center gap-1" aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className="typing-dot h-1.5 w-1.5 rounded-full bg-accent-soft"
+              style={{ animationDelay: `${i * 0.16}s` }}
+            />
+          ))}
+        </span>
         <span
-          key={i}
-          className="typing-dot h-1.5 w-1.5 rounded-full bg-accent-soft"
-          style={{ animationDelay: `${i * 0.16}s` }}
-        />
-      ))}
-    </span>
+          key={stage}
+          className="animate-slide-in text-[12.5px] text-muted"
+          aria-live="polite"
+        >
+          {WORKING_STAGES[stage]}…
+        </span>
+      </div>
+      <span className="relative h-px w-full overflow-hidden rounded bg-line">
+        <span className="absolute inset-y-0 w-1/3 animate-sweep bg-gradient-to-r from-transparent via-accent to-transparent" />
+      </span>
+    </div>
   );
 }

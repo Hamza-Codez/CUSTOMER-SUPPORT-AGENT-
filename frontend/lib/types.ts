@@ -121,3 +121,49 @@ export type Message = {
   pending?: boolean;
   failed?: boolean;
 };
+
+export type Analytics = {
+  conversations: number;
+  escalated_conversations: number;
+  deflection_rate: number | null;
+  escalations: Record<string, number>;
+  handoff_approval_rate: number | null;
+  csat_responses: number;
+  csat_average: number | null;
+  refunds_executed: number;
+  model_requests: number;
+  total_tokens: number;
+  tokens_per_conversation: number | null;
+  cost_per_conversation: number | null;
+  cost_note: string | null;
+};
+
+export type IntegrationRequestBody = {
+  contact_name: string;
+  contact_email: string;
+  website?: string;
+  platform?: string;
+  monthly_conversations?: string;
+  notes?: string;
+};
+
+export type IntegrationAccepted = {
+  request_id: string;
+  status: string;
+  message: string;
+};
+
+export type Account = {
+  user_id: string;
+  business_id: string;
+  business_name: string;
+  email: string;
+  name: string;
+  role: string;
+};
+
+export type AuthResponse = {
+  token: string;
+  expires_in_days: number;
+  account: Account;
+};
