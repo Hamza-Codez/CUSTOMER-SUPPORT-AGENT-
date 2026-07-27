@@ -14,7 +14,7 @@ from typing import Any
 
 import asyncpg
 
-from app.db.base import AuditEntry, OrderRecord, Store
+from app.db.base import AuditEntry, OrderRecord, PolicyRecord, ProductRecord, Store
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 SEED_PATH = Path(__file__).with_name("seed.sql")
@@ -128,6 +128,51 @@ class PostgresStore(Store):
             item_count=row["item_count"],
             total=_money(row["total"]),
         )
+
+    async def list_products(self, business_id: str) -> list[ProductRecord]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                select product_id, business_id, name, price, stock, summary, attributes
+                  from fte.products
+                 where business_id = $1
+                 order by product_id
+                """,
+                business_id,
+            )
+        return [
+            ProductRecord(
+                product_id=r["product_id"],
+                business_id=r["business_id"],
+                name=r["name"],
+                price=_money(r["price"]),
+                stock=r["stock"],
+                summary=r["summary"],
+                attributes=dict(r["attributes"] or {}),
+            )
+            for r in rows
+        ]
+
+    async def list_policies(self, business_id: str) -> list[PolicyRecord]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                select business_id, topic, body, source_ref
+                  from fte.policies
+                 where business_id = $1
+                 order by source_ref
+                """,
+                business_id,
+            )
+        return [
+            PolicyRecord(
+                business_id=r["business_id"],
+                topic=r["topic"],
+                text=r["body"],
+                source_ref=r["source_ref"],
+            )
+            for r in rows
+        ]
 
     # --- audit ----------------------------------------------------------------
 

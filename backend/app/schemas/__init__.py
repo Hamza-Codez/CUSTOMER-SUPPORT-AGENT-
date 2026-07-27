@@ -80,13 +80,66 @@ class OrderLookupResult(BaseModel):
     message: str
 
     def __str__(self) -> str:
-        """What the *model* sees for this tool result.
+        return _for_model(self)
 
-        The Agents SDK stringifies a tool's return value before handing it back to
-        the model, and the default for a Pydantic model is Python repr
-        (`outcome='found' order=OrderStatus(...)`). That is both wasteful in tokens
-        and awkward to parse reliably. Emitting compact JSON instead keeps the
-        result unambiguous for the model while `ToolCallOutputItem.output` stays a
-        typed object for our own code.
-        """
-        return self.model_dump_json(exclude_none=True)
+
+# --- Tool contract: product_catalog ------------------------------------------
+
+
+class ProductCard(BaseModel):
+    """One product, in the shape the comparison card renders."""
+
+    product_id: str
+    name: str
+    price: str
+    in_stock: bool
+    summary: str
+    # The fields a customer actually compares on. Kept as a flat map so the
+    # frontend can lay two of these side by side without knowing the category.
+    attributes: dict[str, str] = {}
+
+
+class ProductLookupResult(BaseModel):
+    outcome: Literal["found", "no_match"]
+    products: list[ProductCard] = []
+    message: str
+
+    def __str__(self) -> str:
+        return _for_model(self)
+
+
+# --- Tool contract: policy_retriever -----------------------------------------
+
+
+class PolicyPassage(BaseModel):
+    """A grounded passage. `source_ref` is what makes an answer quotable.
+
+    Phase 4's grounding guardrail trips when this is missing, so no passage may
+    ever be constructed without one.
+    """
+
+    topic: str
+    text: str
+    source_ref: str
+
+
+class PolicyLookupResult(BaseModel):
+    outcome: Literal["found", "no_match"]
+    passages: list[PolicyPassage] = []
+    message: str
+
+    def __str__(self) -> str:
+        return _for_model(self)
+
+
+def _for_model(result: BaseModel) -> str:
+    """What the *model* sees for a tool result.
+
+    The Agents SDK stringifies a tool's return value before handing it back to
+    the model, and the default for a Pydantic model is Python repr
+    (`outcome='found' order=OrderStatus(...)`). That is both wasteful in tokens
+    and awkward to parse reliably. Emitting compact JSON instead keeps the result
+    unambiguous for the model while `ToolCallOutputItem.output` stays a typed
+    object for our own code.
+    """
+    return result.model_dump_json(exclude_none=True)

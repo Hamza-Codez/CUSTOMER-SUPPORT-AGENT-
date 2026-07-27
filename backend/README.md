@@ -87,9 +87,17 @@ app/
     auth.py        token -> TenantContext(business_id, role)
     audit.py       audit log writer
   agents/
-    orders.py      the Orders specialist + get_entry_agent()
-  tools/
-    orders.py      order_lookup — THE ONLY DOOR TO DATA
+    orchestrator.py  triage + the whole team wired together; get_entry_agent()
+    orders.py        identity check + order status
+    support.py       grounded policy answers
+    products.py      explanations and comparisons
+    refunds.py       policy check + eligibility (no money-moving tool yet — Phase 3)
+  tools/           THE ONLY DOOR TO DATA
+    orders.py        order_lookup
+    products.py      product_catalog
+    policies.py      policy_retriever
+  rag/
+    keyword.py     IDF-weighted keyword retrieval; the Phase 4 vector-store swap point
   db/
     base.py        the Store contract both implementations satisfy
     mock_store.py  in-memory; mirrors seed.sql
@@ -110,6 +118,13 @@ app/
   normal result the agent reasons about, not an exception that becomes a 500.
 - **Refusals are logged too.** A denied identity check is exactly the event worth
   having on record.
+- **A retrieval miss returns nothing.** Retrieval that always returns something
+  can never miss, so the agent never learns it doesn't know — it just cites
+  whatever was least unrelated. `keyword.MIN_RELEVANCE` is what makes "I can't
+  confirm that" reachable.
+- **Money-moving tools arrive already gated.** The Refunds agent deliberately has
+  no `refund_processor` in this phase. It lands in Phase 3 together with its cap,
+  tool guardrail and approval pause — never in an ungated state, not even briefly.
 
 ---
 
@@ -120,16 +135,38 @@ Checked against the real thing on 2026-07-26, not assumed:
 | What | Result |
 |---|---|
 | `openai-agents` 0.18.3 on Python 3.14.3 | works |
-| **54 tests**, mock and PostgreSQL, no skips | pass |
+| **119 tests**, mock and PostgreSQL, no skips | pass |
 | Live `uvicorn` — `/health`, `/chat`, 401, multi-turn memory | pass |
-| **Gemini tool-calling** via the OpenAI-compatible endpoint | **confirmed** (`gemini-flash-latest`, `gemini-3.6-flash`) |
-| Gemini honours identity refusal, unknown order, prompt injection | no data leaked in any case |
-| Cross-tenant attempt (naming another `business_id` in the message) | structurally ignored |
-| **Real Supabase PostgreSQL** — schema, seed, tool, audit, sessions | pass |
+| **Gemini tool-calling** via the OpenAI-compatible endpoint | **confirmed** |
+| **Gemini handoffs** — Orchestrator → Orders → `order_lookup`, → Support → cited policy | **confirmed** |
+| Gemini honours identity refusal, unknown order, prompt injection | no data leaked |
+| Cross-tenant attempt (naming another `business_id` in a message) | structurally ignored |
+| **Real Supabase PostgreSQL** — schema, seed, tools, audit, sessions | pass |
 | Mock and Postgres stores return identical records | asserted per-row |
 | Full stack: real Gemini reading real Postgres | pass, audit persisted across processes |
 
-Everything above was run, not assumed. Nothing in Phase 1 is unverified.
+**Not verified against real Gemini yet:** routing to Products and Refunds, and
+the grounding-refusal and injection cases *in the multi-agent setup*. All are
+covered on the mock provider — which drives the real Runner, real handoffs and
+real tools — but the mock cannot prove the live model's judgement. Verification
+stopped because the free-tier **daily** quota ran out mid-run; see below.
+
+⚠️ **`gemini-2.5-flash` does not work on new API keys.** It is still returned by
+the models endpoint, but calling it 404s with *"no longer available to new users"*.
+A pinned model name is therefore not automatically the safer choice on Gemini —
+re-verify whatever you pin.
+
+### ⚠️ Free-tier quota is a product constraint, not just a dev annoyance
+
+`gemini-flash-latest` currently resolves to **`gemini-3.6-flash`**, whose free
+tier allows **20 requests per day** (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`),
+alongside a 5/minute limit. Failed requests count against both.
+
+This design costs **two model calls per customer turn** — one for the Orchestrator
+to route, one for the specialist — which is the price of specialisation. On the
+free tier that is roughly **10 conversation turns per day**. The demo playground
+in Phase 7 is not viable on that, so either a paid key or a model with a larger
+free allowance is needed before then. Worth deciding early rather than at demo time.
 
 ⚠️ **`gemini-2.5-flash` does not work on new API keys.** It is still returned by
 the models endpoint, but calling it 404s with *"no longer available to new users"*.

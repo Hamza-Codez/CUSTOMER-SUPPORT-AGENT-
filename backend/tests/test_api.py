@@ -16,6 +16,16 @@ def client(store):
         yield c
 
 
+def tool_actions(body: dict) -> list[dict]:
+    """Actions excluding routing.
+
+    Since Phase 2 every turn begins with the Orchestrator handing off, so a
+    "routed" chip always leads. These assertions are about what the specialist
+    then *did*.
+    """
+    return [a for a in body["actions"] if a["kind"] != "routed"]
+
+
 class TestHealth:
     def test_reports_provider_and_store(self, client):
         body = client.get("/health").json()
@@ -62,7 +72,7 @@ class TestChatFlow:
         body = r.json()
         assert body["session_id"] == "t1"
         assert "ORD-1002" in body["reply"]
-        assert body["actions"] == [
+        assert tool_actions(body) == [
             {"kind": "order_looked_up", "label": "ORD-1002 · in transit", "ref": "ORD-1002"}
         ]
 
@@ -72,19 +82,19 @@ class TestChatFlow:
             json={"message": "where is my order?", "session_id": "t2"},
             headers=AUTH,
         ).json()
-        assert body["actions"] == []
+        assert tool_actions(body) == []
         assert "order number" in body["reply"].lower()
 
     def test_identity_mismatch_surfaces_as_an_action(self, client):
         body = client.post(
             "/chat",
             json={
-                "message": "ORD-1002 email attacker@example.com",
+                "message": "where is my order ORD-1002? email attacker@example.com",
                 "session_id": "t3",
             },
             headers=AUTH,
         ).json()
-        assert body["actions"][0]["kind"] == "identity_check_failed"
+        assert tool_actions(body)[0]["kind"] == "identity_check_failed"
         assert "FedEx" not in body["reply"]
 
 
@@ -96,14 +106,14 @@ class TestSessionMemory:
             json={"message": "where is my order ORD-1002?", "session_id": "mem"},
             headers=AUTH,
         ).json()
-        assert first["actions"] == []
+        assert tool_actions(first) == []
 
         second = client.post(
             "/chat",
             json={"message": "ayesha.k@example.com", "session_id": "mem"},
             headers=AUTH,
         ).json()
-        assert second["actions"][0]["kind"] == "order_looked_up"
+        assert tool_actions(second)[0]["kind"] == "order_looked_up"
 
     def test_a_new_session_id_starts_clean(self, client):
         client.post(
@@ -116,8 +126,10 @@ class TestSessionMemory:
             json={"message": "ayesha.k@example.com", "session_id": "b"},
             headers=AUTH,
         ).json()
-        # Session "b" never saw the order id, so nothing should be looked up.
-        assert body["actions"] == []
+        # Session "b" never saw the order id, so no order may be looked up.
+        # (It may still do something else with a bare email; what matters is that
+        # it cannot resolve an order it was never told about.)
+        assert "order_looked_up" not in [a["kind"] for a in tool_actions(body)]
 
     def test_sessions_are_isolated_between_tenants(self, client, store):
         """Same session_id, different businesses — memory must not be shared."""
@@ -133,8 +145,8 @@ class TestSessionMemory:
         )
         mine = await_sync(store.get_session_items("biz_demo", "shared"))
         theirs = await_sync(store.get_session_items("biz_other", "shared"))
-        assert len(mine) == 2
-        assert len(theirs) == 2
+        assert mine and theirs
+        assert "ORD-1002" in str(mine)
         assert "ORD-1002" not in str(theirs)
 
 

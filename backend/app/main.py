@@ -12,11 +12,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from agents import Runner
-from agents.items import ToolCallOutputItem
+from agents.items import HandoffOutputItem, ToolCallOutputItem
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.agents.orders import get_entry_agent
+from app.agents.orchestrator import get_entry_agent
 from app.core.auth import TenantDep
 from app.core.config import get_settings
 from app.db import get_store, set_store
@@ -79,42 +79,82 @@ def _tool_payload(item: ToolCallOutputItem) -> dict[str, Any] | None:
     return dump() if callable(dump) else None
 
 
+def _order_action(payload: dict[str, Any]) -> AgentAction:
+    outcome = payload["outcome"]
+    if outcome == "identity_mismatch":
+        return AgentAction(kind="identity_check_failed", label="Identity not verified")
+    if outcome == "not_found":
+        return AgentAction(kind="order_not_found", label="Order not found")
+
+    order = payload.get("order") or {}
+    ref = order.get("order_id")
+    status = str(order.get("status", "")).replace("_", " ")
+    return AgentAction(
+        kind="order_looked_up", label=f"{ref} · {status}".strip(" ·"), ref=ref
+    )
+
+
+def _product_action(payload: dict[str, Any]) -> AgentAction:
+    products = payload.get("products") or []
+    if not products:
+        return AgentAction(kind="no_product_match", label="No catalogue match")
+    if len(products) == 1:
+        p = products[0]
+        return AgentAction(
+            kind="product_viewed", label=p["name"], ref=p["product_id"]
+        )
+    return AgentAction(
+        kind="products_compared",
+        label=" vs ".join(p["name"] for p in products),
+        ref=",".join(p["product_id"] for p in products),
+    )
+
+
+def _policy_action(payload: dict[str, Any]) -> AgentAction:
+    passages = payload.get("passages") or []
+    if not passages:
+        return AgentAction(kind="no_policy_match", label="No grounded policy found")
+    return AgentAction(
+        kind="policy_cited",
+        label=passages[0]["topic"],
+        ref=passages[0]["source_ref"],
+    )
+
+
 def collect_actions(result: Any) -> list[AgentAction]:
     """Derive UI action chips from what the agent actually did.
 
-    These come from real tool results, so a chip can only appear if a tool ran.
+    Every chip is built from a real handoff or a real tool result, so a chip can
+    only appear if the thing it describes actually happened.
     """
     actions: list[AgentAction] = []
+
     for item in result.new_items:
+        if isinstance(item, HandoffOutputItem):
+            actions.append(
+                AgentAction(
+                    kind="routed",
+                    label=f"Routed to {item.target_agent.name}",
+                    ref=item.target_agent.name,
+                )
+            )
+            continue
+
         if not isinstance(item, ToolCallOutputItem):
             continue
         payload = _tool_payload(item)
         if not payload or "outcome" not in payload:
             continue
 
-        outcome = payload["outcome"]
-        if outcome == "found":
-            order = payload.get("order") or {}
-            ref = order.get("order_id")
-            status = str(order.get("status", "")).replace("_", " ")
-            actions.append(
-                AgentAction(
-                    kind="order_looked_up",
-                    label=f"{ref} · {status}".strip(" ·"),
-                    ref=ref,
-                )
-            )
-        elif outcome == "not_found":
-            actions.append(
-                AgentAction(kind="order_not_found", label="Order not found")
-            )
-        elif outcome == "identity_mismatch":
-            actions.append(
-                AgentAction(
-                    kind="identity_check_failed",
-                    label="Identity not verified",
-                )
-            )
+        # Which tool produced this is read off the payload's shape rather than
+        # tracked separately — the result schemas are disjoint by construction.
+        if "products" in payload:
+            actions.append(_product_action(payload))
+        elif "passages" in payload:
+            actions.append(_policy_action(payload))
+        else:
+            actions.append(_order_action(payload))
+
     return actions
 
 

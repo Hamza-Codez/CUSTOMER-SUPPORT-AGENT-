@@ -37,6 +37,35 @@ class OrderRecord:
     total: str
 
 
+@dataclass(frozen=True)
+class ProductRecord:
+    product_id: str
+    business_id: str
+    name: str
+    price: str
+    stock: int
+    summary: str
+    attributes: dict[str, str]
+
+    @property
+    def in_stock(self) -> bool:
+        return self.stock > 0
+
+
+@dataclass(frozen=True)
+class PolicyRecord:
+    """A parsed passage of the seller's own written policy.
+
+    `source_ref` is mandatory, not decorative: an answer that cannot cite one is
+    an answer the agent is not allowed to give.
+    """
+
+    business_id: str
+    topic: str
+    text: str
+    source_ref: str
+
+
 @dataclass
 class AuditEntry:
     business_id: str
@@ -69,6 +98,18 @@ class Store(ABC):
     async def get_order(self, business_id: str, order_id: str) -> OrderRecord | None:
         """Fetch one order scoped to a tenant. Returns None if it does not exist
         for that tenant — a caller can never reach another business's row."""
+
+    # Products and policies are returned whole, per tenant, and ranked in Python
+    # by `app/rag/keyword.py`. Both sets are small and slow-changing, and doing
+    # the matching in one place is what guarantees the mock and Postgres stores
+    # rank identically. Phase 4 replaces the ranking with a vector search; these
+    # signatures are the seam it swaps behind.
+
+    @abstractmethod
+    async def list_products(self, business_id: str) -> list[ProductRecord]: ...
+
+    @abstractmethod
+    async def list_policies(self, business_id: str) -> list[PolicyRecord]: ...
 
     # --- audit ----------------------------------------------------------------
 

@@ -22,7 +22,7 @@ os.environ["DEV_TOKENS"] = (
 import pytest  # noqa: E402
 from agents.tool_context import ToolContext  # noqa: E402
 
-from app.agents.orders import get_entry_agent  # noqa: E402
+from app.agents.orchestrator import get_entry_agent  # noqa: E402
 from app.core.auth import TenantContext  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.model import gemini_model  # noqa: E402

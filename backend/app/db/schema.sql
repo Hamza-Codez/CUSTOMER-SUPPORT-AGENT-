@@ -60,6 +60,32 @@ create table if not exists fte.order_items (
 
 create index if not exists order_items_order_idx on fte.order_items (order_ref);
 
+create table if not exists fte.products (
+    product_id  text        not null,
+    business_id text        not null references fte.businesses (id) on delete cascade,
+    name        text        not null,
+    price       numeric(12, 2) not null default 0,
+    stock       int         not null default 0,
+    summary     text        not null default '',
+    -- Comparison points, flat key/value so the compare card stays category-agnostic.
+    attributes  jsonb       not null default '{}'::jsonb,
+    created_at  timestamptz not null default now(),
+    primary key (business_id, product_id)
+);
+
+-- Parsed passages of the seller's written policy. `source_ref` is not nullable
+-- on purpose: a passage that cannot be cited is one the agent must not use, and
+-- the grounding guardrail in Phase 4 depends on that being true at the source.
+create table if not exists fte.policies (
+    id          bigserial primary key,
+    business_id text        not null references fte.businesses (id) on delete cascade,
+    topic       text        not null,
+    body        text        not null,
+    source_ref  text        not null,
+    created_at  timestamptz not null default now(),
+    unique (business_id, source_ref)
+);
+
 -- Agent conversation memory. Backs our SessionABC implementation: `item` is the
 -- raw Agents SDK input item, `role` is denormalised purely so the transcript is
 -- readable in SQL. Ordering is by `id`.

@@ -33,6 +33,53 @@ from (values
 join fte.customers c on c.business_id = v.business_id and c.email = v.email
 on conflict (business_id, order_id) do nothing;
 
+-- Catalogue. PRD-TRAY-1 is deliberately out of stock; PRD-OTHER-1 belongs to the
+-- second tenant and must never surface for biz_demo.
+insert into fte.products (business_id, product_id, name, price, stock, summary, attributes) values
+    ('biz_demo', 'PRD-DESK-1',  'AeroDesk Pro Standing Desk',      149.00, 12,
+     'Electric sit-stand desk with a memory controller and a solid bamboo top.',
+     '{"height_range":"71-121 cm","top_material":"Bamboo","weight_capacity":"80 kg","adjustment":"Electric, 4 memory presets","warranty":"5 years","assembly":"About 25 minutes"}'::jsonb),
+    ('biz_demo', 'PRD-DESK-2',  'AeroDesk Lite Standing Desk',      99.00, 30,
+     'Manual crank sit-stand desk in a compact footprint for smaller rooms.',
+     '{"height_range":"73-118 cm","top_material":"Laminate","weight_capacity":"60 kg","adjustment":"Manual crank","warranty":"2 years","assembly":"About 40 minutes"}'::jsonb),
+    ('biz_demo', 'PRD-CHAIR-1', 'AeroChair Ergonomic Task Chair',  249.00,  5,
+     'Mesh-back task chair with adjustable lumbar support and a headrest.',
+     '{"back":"Breathable mesh","lumbar":"Adjustable, 4-way","armrests":"3D adjustable","weight_capacity":"120 kg","warranty":"5 years"}'::jsonb),
+    ('biz_demo', 'PRD-CUSH-1',  'AeroChair Lumbar Cushion',         29.50, 80,
+     'Memory-foam lumbar cushion that straps to most existing office chairs.',
+     '{"fill":"Memory foam","cover":"Washable mesh","fitting":"Two-strap, fits most chairs","warranty":"1 year"}'::jsonb),
+    ('biz_demo', 'PRD-TRAY-1',  'AeroDesk Cable Tray',             140.00,  0,
+     'Under-desk cable management tray. Currently out of stock.',
+     '{"length":"80 cm","mounting":"Clamp-on, no drilling","warranty":"2 years"}'::jsonb),
+    ('biz_other','PRD-OTHER-1', 'Unrelated Seller Widget',          10.00,  3,
+     'Belongs to another tenant and must never surface for biz_demo.',
+     '{"note":"tenancy fixture"}'::jsonb)
+on conflict (business_id, product_id) do nothing;
+
+insert into fte.policies (business_id, topic, body, source_ref) values
+    ('biz_demo', 'Refund window',
+     'Refunds are available within 30 days of delivery, provided the item is unused and in its original packaging. Refunds are issued to the original payment method and take 5-10 business days to appear.',
+     'refund-policy.md#refund-window'),
+    ('biz_demo', 'Damaged or faulty goods',
+     'If an item arrives damaged or develops a fault within 30 days, we replace or refund it in full including original shipping. Photographs of the damage help us process the claim faster, but are not required.',
+     'refund-policy.md#damaged-goods'),
+    ('biz_demo', 'How to start a return',
+     'To return an item, contact support with your order number. We email a prepaid return label. Returns are free for faulty goods; for change-of-mind returns a 4.99 label fee is deducted from the refund.',
+     'returns-policy.md#starting-a-return'),
+    ('biz_demo', 'Order processing and dispatch',
+     'Orders placed before 2pm on a working day are dispatched the same day. Orders placed after 2pm, at weekends, or on public holidays are dispatched the next working day.',
+     'shipping-policy.md#dispatch'),
+    ('biz_demo', 'Delivery times and methods',
+     'Standard delivery takes 3-5 working days and is free over 50. Express delivery takes 1-2 working days and costs 7.99. Large items such as desks are delivered by a two-person carrier team on a booked slot.',
+     'shipping-policy.md#delivery-times'),
+    ('biz_demo', 'Warranty cover',
+     'Desks and chairs carry a 5 year warranty on frames and mechanisms. Accessories carry 1-2 years. Warranty covers manufacturing defects, not accidental damage or normal wear.',
+     'warranty-policy.md#cover'),
+    ('biz_other', 'Unrelated seller policy',
+     'Belongs to another tenant and must never surface for biz_demo.',
+     'other-tenant.md#fixture')
+on conflict (business_id, source_ref) do nothing;
+
 -- Line items. Quantities are what the tool reports as `item_count`.
 insert into fte.order_items (business_id, order_ref, product_name, qty, unit_price)
 select v.business_id, o.id, v.product_name, v.qty, v.unit_price::numeric

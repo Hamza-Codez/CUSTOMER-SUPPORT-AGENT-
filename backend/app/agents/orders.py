@@ -1,22 +1,17 @@
-"""The Orders specialist.
-
-In Phase 1 this is the entry agent. In Phase 2 it keeps this exact definition and
-becomes one specialist behind the Orchestrator — `get_entry_agent()` is the only
-thing that changes, which is why the HTTP and tool contracts stay frozen.
-
-The prompt is a job description: who it is, which tool to use and when, and the
-hard rules. The prompt guides; the tool and its guardrails enforce.
-"""
+"""The Orders specialist — identity verification and order status."""
 
 from __future__ import annotations
 
-from functools import lru_cache
-
 from agents import Agent
+from agents.models.interface import Model
 
 from app.core.auth import TenantContext
-from app.core.model import gemini_model
 from app.tools.orders import order_lookup
+
+HANDOFF_DESCRIPTION = (
+    "Handles anything about an existing order: where it is, delivery status, "
+    "tracking, carrier, when it will arrive, or whether it has shipped."
+)
 
 ORDERS_PROMPT = """
 You are the Orders specialist for an online store's support team. You help
@@ -32,30 +27,21 @@ How you work:
   customer to re-check the number.
 - If the tool reports an identity mismatch, do not reveal any order detail.
   Explain kindly that the email must match the one on the order.
+- If the customer wants a refund or return for the order, hand off to the
+  Refunds specialist rather than ruling on it yourself.
 
 Your tone: natural, warm and brief. Two or three sentences. You are a colleague
 who is genuinely helpful, not a form and not a script. Close by offering the
 next useful step.
-
-If the customer asks about something outside orders and delivery — refunds,
-products, policies — tell them you can help with that shortly. Do not attempt
-to answer it from your own knowledge.
 """.strip()
 
 
-def build_orders_agent() -> Agent[TenantContext]:
+def build_orders_agent(model: Model, handoffs: list[Agent] | None = None) -> Agent[TenantContext]:
     return Agent[TenantContext](
         name="Orders",
+        handoff_description=HANDOFF_DESCRIPTION,
         instructions=ORDERS_PROMPT,
         tools=[order_lookup],
-        model=gemini_model(),
+        handoffs=handoffs or [],
+        model=model,
     )
-
-
-@lru_cache
-def get_entry_agent() -> Agent[TenantContext]:
-    """The agent `/chat` starts a run with.
-
-    Phase 2 repoints this at the Orchestrator; no caller changes.
-    """
-    return build_orders_agent()
