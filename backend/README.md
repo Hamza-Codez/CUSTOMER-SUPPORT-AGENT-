@@ -52,6 +52,15 @@ works, so you can point real Gemini at the in-memory store or vice versa.
 
 ### Going real
 
+> **URL-encode the password in `DATABASE_URL`.** A raw `#` truncates the URL into
+> a fragment and the port parses as garbage (`invalid literal for int()`).
+> `#`→`%23`, `/`→`%2F`, `*`→`%2A`, `@`→`%40`, `:`→`%3A`.
+
+> **Our tables live in an `fte` schema, not `public`.** The database this was
+> built against already hosted unrelated projects with colliding table names
+> (`orders`, `products`, `users`); `create table if not exists` would have bound
+> to those. Namespacing keeps us additive — nothing outside `fte` is touched.
+
 ```bash
 # 1. Put a DATABASE_URL in .env, then create the schema and demo rows:
 uv run python scripts/init_db.py
@@ -111,15 +120,16 @@ Checked against the real thing on 2026-07-26, not assumed:
 | What | Result |
 |---|---|
 | `openai-agents` 0.18.3 on Python 3.14.3 | works |
-| 43 tests on mock provider + in-memory store | pass |
+| **54 tests**, mock and PostgreSQL, no skips | pass |
 | Live `uvicorn` — `/health`, `/chat`, 401, multi-turn memory | pass |
 | **Gemini tool-calling** via the OpenAI-compatible endpoint | **confirmed** (`gemini-flash-latest`, `gemini-3.6-flash`) |
 | Gemini honours identity refusal, unknown order, prompt injection | no data leaked in any case |
 | Cross-tenant attempt (naming another `business_id` in the message) | structurally ignored |
+| **Real Supabase PostgreSQL** — schema, seed, tool, audit, sessions | pass |
+| Mock and Postgres stores return identical records | asserted per-row |
+| Full stack: real Gemini reading real Postgres | pass, audit persisted across processes |
 
-**Not yet verified:** the PostgreSQL path. `tests/test_postgres.py` is written and
-skips until a `DATABASE_URL` exists. Until it runs green, treat `postgres_store.py`
-as unexercised code.
+Everything above was run, not assumed. Nothing in Phase 1 is unverified.
 
 ⚠️ **`gemini-2.5-flash` does not work on new API keys.** It is still returned by
 the models endpoint, but calling it 404s with *"no longer available to new users"*.

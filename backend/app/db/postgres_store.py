@@ -74,6 +74,10 @@ class PostgresStore(Store):
                 min_size=1,
                 max_size=5,
                 init=self._init_connection,
+                # Our tables live in the `fte` schema, never `public` — the target
+                # database may host unrelated projects with colliding table names.
+                # Every unqualified identifier below resolves here first.
+                server_settings={"search_path": "fte,public"},
             )
 
     async def close(self) -> None:
