@@ -43,8 +43,11 @@ class Settings(BaseSettings):
     # Dev-only static tokens: "<token>:<business_id>:<role>", comma separated.
     dev_tokens: str = "demo-token:biz_demo:customer,ops-token:biz_demo:operator"
 
-    # Declared now so config stays stable; enforced when refunds land in Phase 3.
+    # Money-moving limits, enforced in code by the refund tool guardrail — never
+    # by the prompt. Above the cap, or outside the window, the run pauses for a
+    # human instead of executing.
     auto_refund_cap: float = 25.00
+    refund_window_days: int = 30
 
     @property
     def store_kind(self) -> Literal["mock", "postgres"]:

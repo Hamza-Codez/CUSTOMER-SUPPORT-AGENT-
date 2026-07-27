@@ -1,22 +1,24 @@
-"""The Refunds specialist — policy check and eligibility.
+"""The Refunds specialist — policy check, eligibility, and the refund itself.
 
-Phase 2 scope note: this agent reads policy and explains where a request stands.
-It has **no** `refund_processor` tool, deliberately. A money-moving tool that
-exists before its cap, its tool guardrail and its human-approval pause is a tool
-that can move money without them — so `refund_processor` arrives in Phase 3
-already gated, and never in an ungated state.
+The agent now holds `refund_processor`, which arrived already gated: identity,
+amount and duplicate checks refuse outright, and the auto-cap and refund window
+pause for a human. It has never existed in an ungated form.
 
-Until then the honest behaviour is to explain the ruling and route to a person.
+Note what the prompt below does *not* do: it does not state the cap, and it does
+not ask the model to decide eligibility. Those live in
+`app/guardrails/refund_guard.py`, where they cannot be talked around.
 """
 
 from __future__ import annotations
 
-from agents import Agent
+from agents import Agent, ModelSettings
 from agents.models.interface import Model
 
 from app.core.auth import TenantContext
+from app.guardrails.grounding import must_be_grounded
 from app.tools.orders import order_lookup
 from app.tools.policies import policy_retriever
+from app.tools.refunds import human_escalation, refund_processor
 
 HANDOFF_DESCRIPTION = (
     "Handles refund and return requests: whether a refund is possible, what the "
@@ -37,11 +39,17 @@ How you work:
   a real status rather than assumptions.
 - Explain the outcome warmly and give the reason. A customer who does not qualify
   should still understand why, and should not feel dismissed.
-- You cannot issue a refund yourself. When a request looks eligible, say that you
-  are passing it to a colleague to process, and tell them what happens next. When
-  it falls outside the policy, say so kindly and offer the same handover, because
-  a person can still choose to make an exception. Never promise money will be
-  returned, and never state that a refund has been issued.
+- To issue a refund, call `refund_processor` with the order id and the order's
+  full total. You do not judge whether it is allowed — that is enforced outside
+  you. Read what the tool returns and say only that:
+    * 'executed' means the money is on its way. Only then may you say so.
+    * If the run is paused for a colleague's approval, tell the customer a
+      colleague is reviewing it and will be in touch. Do not promise an outcome.
+    * If the tool refuses, explain the reason it gives and what would fix it.
+- Never tell a customer they have been refunded unless the tool said 'executed'.
+  Being wrong about that is the worst mistake you can make.
+- Use `human_escalation` when the customer is upset, asks for a person, or wants
+  something the policy does not cover.
 - If the customer is upset, acknowledge that first, before any policy detail.
 
 Your tone: warm, human and direct. Lead with where they stand, then the reason.
@@ -54,6 +62,13 @@ def build_refunds_agent(model: Model) -> Agent[TenantContext]:
         name="Refunds",
         handoff_description=HANDOFF_DESCRIPTION,
         instructions=REFUNDS_PROMPT,
-        tools=[policy_retriever, order_lookup],
+        tools=[policy_retriever, order_lookup, refund_processor, human_escalation],
+        # Must retrieve before it speaks. `reset_tool_choice` (Agent default True)
+        # releases this after the first tool call, so it can still write the final
+        # reply — this forces a lookup, not a loop. Added because the live model
+        # answered from its own knowledge instead of calling its tool, which the
+        # grounding guardrail caught but only by withholding the answer entirely.
+        model_settings=ModelSettings(tool_choice="required"),
+        output_guardrails=[must_be_grounded],
         model=model,
     )

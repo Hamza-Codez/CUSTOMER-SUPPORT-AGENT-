@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from agents import Agent
+from agents import Agent, ModelSettings
 
 from app.agents.orders import build_orders_agent
 from app.agents.products import build_products_agent
@@ -25,6 +25,8 @@ from app.agents.refunds import build_refunds_agent
 from app.agents.support import build_support_agent
 from app.core.auth import TenantContext
 from app.core.model import gemini_model
+from app.guardrails.grounding import must_be_grounded
+from app.guardrails.input_guards import scope_and_safety
 
 TRIAGE_PROMPT = """
 You are the triage coordinator for an online store's support team. You do not
@@ -67,5 +69,19 @@ def get_entry_agent() -> Agent[TenantContext]:
         instructions=TRIAGE_PROMPT,
         tools=[],
         handoffs=[support, orders, products, refunds],
+        # Handoffs reach the model as tools, so requiring a tool call makes
+        # routing the only move available. The prompt above already said "never
+        # answer yourself" and the live model did it anyway — twice, in different
+        # runs, with different questions. Asking harder was not going to work.
+        #
+        # Without this the grounding guardrail still catches it, but the customer
+        # gets "let me find a colleague" instead of an answer. Safe is not the
+        # same as working.
+        model_settings=ModelSettings(tool_choice="required"),
+        # Input guardrails run on the first agent only, which is exactly here.
+        input_guardrails=[scope_and_safety],
+        # Backstop, not the primary defence: if a handoff somehow does not happen,
+        # an ungrounded answer must still never reach the customer.
+        output_guardrails=[must_be_grounded],
         model=model,
     )

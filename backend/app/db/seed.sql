@@ -26,12 +26,24 @@ from (values
     ('biz_demo',  'ORD-1002', 'ayesha.k@example.com',      'in_transit', '2026-07-19', 'FedEx',       'FX884120774',   '2026-07-29', '59.00'),
     ('biz_demo',  'ORD-1003', 'daniel.m@example.com',      'delivered',  '2026-04-11', 'DHL Express', 'DHL7740028851', '2026-04-16', '89.00'),
     ('biz_demo',  'ORD-1004', 'sofia.r@example.com',       'processing', '2026-07-24', null,          null,            '2026-08-01', '420.00'),
+    -- Small, recent and in policy: the only order refundable without a human.
+    -- Its dates are reset relative to current_date below.
+    ('biz_demo',  'ORD-1005', 'ayesha.k@example.com',      'delivered',  '2026-07-17', 'Royal Mail',  'RM4471200GB',   '2026-07-22', '19.99'),
     -- Second tenant, deliberately reusing the id ORD-1002 so cross-tenant
     -- isolation can actually be tested rather than merely asserted.
     ('biz_other', 'ORD-1002', 'someone@other.example.com', 'cancelled',  '2026-07-01', null,          null,            null,         '10.00')
 ) as v (business_id, order_id, email, status, placed_at, carrier, tracking_number, eta, total)
 join fte.customers c on c.business_id = v.business_id and c.email = v.email
 on conflict (business_id, order_id) do nothing;
+
+-- Keep ORD-1005 inside the refund window permanently, and matching the relative
+-- dates app/db/mock_store.py computes. Runs unconditionally, unlike the insert
+-- above, because a row seeded weeks ago would otherwise age out of the window and
+-- silently take the auto-refund demo with it.
+update fte.orders
+   set placed_at = current_date - 10,
+       eta       = current_date - 5
+ where business_id = 'biz_demo' and order_id = 'ORD-1005';
 
 -- Catalogue. PRD-TRAY-1 is deliberately out of stock; PRD-OTHER-1 belongs to the
 -- second tenant and must never surface for biz_demo.
@@ -88,6 +100,7 @@ from (values
     ('biz_demo',  'ORD-1002', 'AeroChair Lumbar Cushion', 2, '29.50'),
     ('biz_demo',  'ORD-1003', 'AeroChair Footrest',       1, '89.00'),
     ('biz_demo',  'ORD-1004', 'AeroDesk Cable Tray',      3, '140.00'),
+    ('biz_demo',  'ORD-1005', 'AeroChair Felt Desk Mat',  1, '19.99'),
     ('biz_other', 'ORD-1002', 'Unrelated Item',           1, '10.00')
 ) as v (business_id, order_id, product_name, qty, unit_price)
 join fte.orders o on o.business_id = v.business_id and o.order_id = v.order_id

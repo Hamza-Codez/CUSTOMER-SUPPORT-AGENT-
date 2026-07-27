@@ -6,6 +6,7 @@ from agents import Agent
 from agents.models.interface import Model
 
 from app.core.auth import TenantContext
+from app.guardrails.grounding import must_be_grounded
 from app.tools.orders import order_lookup
 
 HANDOFF_DESCRIPTION = (
@@ -43,5 +44,6 @@ def build_orders_agent(model: Model, handoffs: list[Agent] | None = None) -> Age
         instructions=ORDERS_PROMPT,
         tools=[order_lookup],
         handoffs=handoffs or [],
+        output_guardrails=[must_be_grounded],
         model=model,
     )

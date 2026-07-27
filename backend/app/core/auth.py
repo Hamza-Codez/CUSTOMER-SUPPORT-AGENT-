@@ -12,7 +12,7 @@ which tenant's data a tool reads.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -23,12 +23,45 @@ from app.db import Store, get_store
 
 @dataclass
 class TenantContext:
-    """Passed to `Runner.run(context=...)` and read by tools via `RunContextWrapper`."""
+    """Passed to `Runner.run(context=...)` and read by tools via `RunContextWrapper`.
+
+    The fields below the line are **evidence gathered during a single run**, written
+    by tools as they execute and read by guardrails before anything is committed.
+
+    They exist because the model cannot be asked whether it verified an identity or
+    checked a policy — it will say yes. Only the tool layer knows what actually
+    happened, so the tool layer records it and the guardrails read that record.
+    """
 
     business_id: str
     role: str
     actor: str
     store: Store
+
+    # Set by the /chat handler once the request body is known. An escalation has
+    # to record which conversation it came from so the outcome can be returned to
+    # the right customer.
+    session_id: str = "default"
+
+    # --- run-scoped evidence ---------------------------------------------------
+    # Names of tools that actually executed this run. Grounding is judged on this.
+    tools_used: list[str] = field(default_factory=list)
+    # source_refs returned by policy_retriever — the citations behind any claim.
+    sources: list[str] = field(default_factory=list)
+    # Order ids whose identity check passed this run. A refund may only touch these.
+    verified_orders: set[str] = field(default_factory=set)
+    # Set when a gated tool pauses, so the Decision Card can state why a human
+    # was needed rather than making the operator infer it.
+    pending_approval_reason: list[str] = field(default_factory=list)
+
+    def note_tool(self, name: str) -> None:
+        self.tools_used.append(name)
+
+    def note_verified(self, order_id: str) -> None:
+        self.verified_orders.add(order_id)
+
+    def has_grounding(self) -> bool:
+        return bool(self.tools_used)
 
 
 def _parse_dev_tokens(raw: str) -> dict[str, tuple[str, str]]:

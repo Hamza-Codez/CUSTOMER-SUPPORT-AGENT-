@@ -27,6 +27,27 @@ curl -X POST localhost:8000/chat \
   -d '{"message":"where is ORD-1002? email ayesha.k@example.com"}'
 ```
 
+Watch a refund pause for a human, then approve it:
+
+```bash
+# ORD-1001 is £149 — over the £25 auto-cap, so no money moves yet
+curl -X POST localhost:8000/chat -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer demo-token' \
+  -d '{"message":"refund ORD-1001, email ayesha.k@example.com","session_id":"demo"}'
+
+# the operator queue (operator token, not the customer one)
+curl localhost:8000/dashboard/escalations -H 'Authorization: Bearer ops-token'
+
+# approve it — the original run resumes and the refund executes
+curl -X POST localhost:8000/escalations/<escalation_id>/decision \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer ops-token' \
+  -d '{"decision":"approve"}'
+```
+
+`ORD-1005` (£19.99, delivered recently) refunds immediately — it is under the cap
+and inside the window. `ORD-1003` pauses for being both over the cap and outside
+the 30-day window.
+
 ## Tests
 
 ```bash
@@ -96,6 +117,13 @@ app/
     orders.py        order_lookup
     products.py      product_catalog
     policies.py      policy_retriever
+    refunds.py       refund_processor (gated) + human_escalation
+  guardrails/
+    input_guards.py  injection + scope screening, in code (no model call)
+    grounding.py     an agent may not assert what no tool returned
+    refund_guard.py  identity/amount refusals, and the cap + window that pause
+  handoffs/
+    human_escalation.py  Decision Cards and the paused-run evidence
   rag/
     keyword.py     IDF-weighted keyword retrieval; the Phase 4 vector-store swap point
   db/
@@ -122,9 +150,29 @@ app/
   can never miss, so the agent never learns it doesn't know — it just cites
   whatever was least unrelated. `keyword.MIN_RELEVANCE` is what makes "I can't
   confirm that" reachable.
-- **Money-moving tools arrive already gated.** The Refunds agent deliberately has
-  no `refund_processor` in this phase. It lands in Phase 3 together with its cap,
-  tool guardrail and approval pause — never in an ungated state, not even briefly.
+- **Money-moving tools arrive already gated.** `refund_processor` shipped with its
+  identity check, amount check, auto-cap and approval pause attached. It has never
+  existed in an ungated form, not even briefly.
+- **Policy is code, not prompt.** The cap and the refund window live in
+  `guardrails/refund_guard.py`. The prompt never states them, so there is nothing
+  to argue the model out of. This is not theoretical: asked to compare two
+  products, the live model ignored an explicit "never answer this yourself"
+  instruction and invented prices.
+- **Evidence comes from tools, not claims.** Guardrails decide on what the tool
+  layer *recorded* — which tools ran, which orders passed an identity check —
+  never on the model's account of what it did.
+
+## The three ways a refund can end
+
+| Situation | Outcome |
+|---|---|
+| Under the cap, inside the window, identity verified | Executes immediately |
+| Over the cap, or outside the window, or not delivered | **Pauses.** Decision Card raised, no money moves until a human approves |
+| Identity unverified, amount mismatched, or already refunded | Refused outright, with a reason the agent can explain |
+
+Approving resumes the *original* paused run rather than starting a new one, so the
+outcome lands in the same customer conversation. Two operators approving at once
+resolves once — a compare-and-set in SQL, not a check-then-write.
 
 ---
 
@@ -135,21 +183,26 @@ Checked against the real thing on 2026-07-26, not assumed:
 | What | Result |
 |---|---|
 | `openai-agents` 0.18.3 on Python 3.14.3 | works |
-| **119 tests**, mock and PostgreSQL, no skips | pass |
+| **185 tests**, mock and PostgreSQL, no skips | pass |
 | Live `uvicorn` — `/health`, `/chat`, 401, multi-turn memory | pass |
-| **Gemini tool-calling** via the OpenAI-compatible endpoint | **confirmed** |
-| **Gemini handoffs** — Orchestrator → Orders → `order_lookup`, → Support → cited policy | **confirmed** |
+| **Gemini tool-calling and handoffs** via the OpenAI-compatible endpoint | **confirmed** |
 | Gemini honours identity refusal, unknown order, prompt injection | no data leaked |
 | Cross-tenant attempt (naming another `business_id` in a message) | structurally ignored |
 | **Real Supabase PostgreSQL** — schema, seed, tools, audit, sessions | pass |
 | Mock and Postgres stores return identical records | asserted per-row |
-| Full stack: real Gemini reading real Postgres | pass, audit persisted across processes |
+| **Refund matrix** — executes under cap, pauses over cap, pauses out of window | pass |
+| **Approval loop on real Postgres** — pause → operator approves → refund pays | pass |
+| Double-approval, duplicate refund, customer-token access to the queue | all refused |
+| **Gemini: over-cap refund paused**, no money moved | **confirmed** |
+| **Gemini: injection blocked**, ungrounded answer withheld | **confirmed** |
 
-**Not verified against real Gemini yet:** routing to Products and Refunds, and
-the grounding-refusal and injection cases *in the multi-agent setup*. All are
-covered on the mock provider — which drives the real Runner, real handoffs and
-real tools — but the mock cannot prove the live model's judgement. Verification
-stopped because the free-tier **daily** quota ran out mid-run; see below.
+**Not verified against real Gemini:** the `tool_choice="required"` setting on the
+Support / Products / Refunds agents (added last, after the daily quota ran out),
+and the approval loop with Gemini rather than the mock provider driving it. The
+approval loop *is* verified end to end against real PostgreSQL, and the refund
+pause *is* verified against real Gemini — but not both in the same run. The mock
+provider drives the real Runner, real handoffs and real tools, so it proves the
+wiring; it cannot prove the live model's judgement.
 
 ⚠️ **`gemini-2.5-flash` does not work on new API keys.** It is still returned by
 the models endpoint, but calling it 404s with *"no longer available to new users"*.

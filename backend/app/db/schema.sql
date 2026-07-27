@@ -86,6 +86,41 @@ create table if not exists fte.policies (
     unique (business_id, source_ref)
 );
 
+-- Money. The unique constraint on (business_id, order_id) is the last line of
+-- defence against paying the same order twice: a retried run, a duplicated
+-- request or a second operator approval all collide here rather than in memory.
+create table if not exists fte.refunds (
+    id          bigserial primary key,
+    refund_id   text        not null unique,
+    business_id text        not null references fte.businesses (id) on delete cascade,
+    order_id    text        not null,
+    amount      numeric(12, 2) not null,
+    reason      text        not null default '',
+    status      text        not null,
+    approved_by text,
+    created_at  timestamptz not null default now(),
+    unique (business_id, order_id)
+);
+
+-- The operator queue. `run_state` is a serialised Agents SDK RunState: it is what
+-- lets a run pause for approval now and resume in a different process later,
+-- continuing from exactly where it stopped instead of being re-improvised.
+create table if not exists fte.escalations (
+    id                bigserial primary key,
+    escalation_id     text        not null unique,
+    business_id       text        not null references fte.businesses (id) on delete cascade,
+    session_id        text        not null,
+    status            text        not null default 'pending',
+    decision_card     jsonb       not null,
+    run_state         jsonb,
+    resolved_by       text,
+    resolution_reason text,
+    created_at        timestamptz not null default now()
+);
+
+create index if not exists escalations_queue_idx
+    on fte.escalations (business_id, status, created_at desc);
+
 -- Agent conversation memory. Backs our SessionABC implementation: `item` is the
 -- raw Agents SDK input item, `role` is denormalised purely so the transcript is
 -- readable in SQL. Ordering is by `id`.

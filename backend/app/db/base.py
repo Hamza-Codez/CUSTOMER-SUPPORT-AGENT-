@@ -66,6 +66,38 @@ class PolicyRecord:
     source_ref: str
 
 
+@dataclass(frozen=True)
+class RefundRecord:
+    refund_id: str
+    business_id: str
+    order_id: str
+    amount: str
+    reason: str
+    status: str  # "executed" | "declined"
+    approved_by: str | None = None
+
+
+@dataclass
+class EscalationRecord:
+    """A Decision Card plus everything needed to resume the paused run.
+
+    `run_state` is the serialised `RunState`. It is what makes the human-approval
+    loop work across requests: the run pauses now, an operator decides minutes or
+    hours later in a different process, and execution continues from exactly where
+    it stopped rather than being re-improvised.
+    """
+
+    escalation_id: str
+    business_id: str
+    session_id: str
+    status: str  # "pending" | "approved" | "declined"
+    decision_card: dict[str, Any]
+    run_state: dict[str, Any] | None = None
+    resolved_by: str | None = None
+    resolution_reason: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 @dataclass
 class AuditEntry:
     business_id: str
@@ -110,6 +142,46 @@ class Store(ABC):
 
     @abstractmethod
     async def list_policies(self, business_id: str) -> list[PolicyRecord]: ...
+
+    # --- money and escalations -------------------------------------------------
+
+    @abstractmethod
+    async def create_refund(self, record: RefundRecord) -> bool:
+        """Record a refund. Returns False if this order already has one.
+
+        One refund per order is enforced by the data layer, not by the agent
+        remembering. A retried run, a duplicated request or a second approval
+        cannot pay the same order twice.
+        """
+
+    @abstractmethod
+    async def get_refund(self, business_id: str, order_id: str) -> RefundRecord | None: ...
+
+    @abstractmethod
+    async def create_escalation(self, record: EscalationRecord) -> None: ...
+
+    @abstractmethod
+    async def list_escalations(
+        self, business_id: str, status: str | None = None, limit: int = 50
+    ) -> list[EscalationRecord]:
+        """Newest first — the operator queue."""
+
+    @abstractmethod
+    async def get_escalation(
+        self, business_id: str, escalation_id: str
+    ) -> EscalationRecord | None: ...
+
+    @abstractmethod
+    async def resolve_escalation(
+        self,
+        business_id: str,
+        escalation_id: str,
+        status: str,
+        resolved_by: str,
+        reason: str | None = None,
+    ) -> bool:
+        """Settle a pending card. Returns False if it was already resolved —
+        which is what stops two operators approving the same refund."""
 
     # --- audit ----------------------------------------------------------------
 

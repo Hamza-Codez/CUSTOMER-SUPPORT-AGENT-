@@ -102,14 +102,34 @@ class TestSpecialistsRunTheirTools:
         assert routed_to(body) == "Refunds"
         assert "policy_cited" in kinds(body)
 
-    def test_refunds_specialist_cannot_move_money_in_this_phase(self, client):
-        """`refund_processor` lands in Phase 3 with its cap and approval, not before."""
+    def test_the_refund_tool_is_gated_wherever_it_appears(self, client):
+        """`refund_processor` has never existed ungated, and must not start now."""
         from app.agents.orchestrator import get_entry_agent
 
         refunds = next(
             a for a in get_entry_agent().handoffs if getattr(a, "name", "") == "Refunds"
         )
-        assert {t.name for t in refunds.tools} == {"policy_retriever", "order_lookup"}
+        assert {t.name for t in refunds.tools} == {
+            "policy_retriever",
+            "order_lookup",
+            "refund_processor",
+            "human_escalation",
+        }
+
+        refund_tool = next(t for t in refunds.tools if t.name == "refund_processor")
+        # A callable needs_approval means the decision is computed per call, not
+        # a blanket True/False someone can flip.
+        assert callable(refund_tool.needs_approval)
+        assert refund_tool.tool_input_guardrails
+
+    def test_no_other_agent_can_reach_the_refund_tool(self, client):
+        """Least privilege is structural: Support literally cannot spend money."""
+        from app.agents.orchestrator import get_entry_agent
+
+        for agent in get_entry_agent().handoffs:
+            if getattr(agent, "name", "") == "Refunds":
+                continue
+            assert "refund_processor" not in {t.name for t in agent.tools}
 
 
 class TestGroundingBehaviour:

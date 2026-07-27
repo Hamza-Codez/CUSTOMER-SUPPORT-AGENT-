@@ -43,6 +43,7 @@ async def order_lookup(
     the missing one before calling this tool — do not guess or invent either.
     """
     tenant = ctx.context
+    tenant.note_tool("order_lookup")
     normalised = normalise_order_id(order_id)
     supplied_email = (email or "").strip()
 
@@ -78,6 +79,10 @@ async def order_lookup(
                 "Details withheld until identity is verified."
             ),
         )
+
+    # Identity proven for this order, in this run. `refund_processor` may only
+    # touch orders that appear here — the model cannot assert its way onto the list.
+    tenant.note_verified(normalised)
 
     await audit.record(
         tenant,

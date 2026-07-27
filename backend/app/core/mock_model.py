@@ -42,6 +42,8 @@ ROUTING = [
                  "shipping", "return", "guarantee")),
 ]
 
+REFUND_WORDS = ("refund", "money back", "reimburse", "send it back", "return this")
+
 POLICY_WORDS = (
     "refund", "return", "policy", "warranty", "dispatch", "shipping",
     "delivery", "how long", "guarantee", "money back",
@@ -178,14 +180,51 @@ def _phrase_policy(payload: dict[str, Any]) -> str:
     return reply + " Does that answer it?"
 
 
-def _phrase(payload: dict[str, Any]) -> str:
-    if "order" in payload or payload.get("outcome") == "identity_mismatch":
-        return _phrase_order(payload)
+def _phrase_refund(payload: dict[str, Any]) -> str:
+    outcome = payload.get("outcome")
+    if outcome == "executed":
+        return (
+            f"That's sorted — I've refunded {payload.get('amount')} to your original "
+            "payment method. It usually lands within 5-10 business days. "
+            "Sorry for the trouble, and thanks for your patience."
+        )
+    if outcome == "already_refunded":
+        return (
+            "Good news — that order has already been refunded, so the money is "
+            "on its way to you. Nothing further to do."
+        )
+    return (
+        "I wasn't able to complete that refund. "
+        f"{payload.get('message', '')} Let me get a colleague to take a look."
+    )
+
+
+def _kind_of(payload: dict[str, Any]) -> str:
+    """Which tool produced this. The result schemas are disjoint by construction."""
     if "products" in payload:
-        return _phrase_products(payload)
+        return "products"
     if "passages" in payload:
+        return "policy"
+    if "refund_id" in payload:
+        return "refund"
+    if "escalation_id" in payload:
+        return "escalation"
+    return "order"
+
+
+def _phrase(payload: dict[str, Any]) -> str:
+    kind = _kind_of(payload)
+    if kind == "products":
+        return _phrase_products(payload)
+    if kind == "policy":
         return _phrase_policy(payload)
-    # not_found / no_match carry no collection, so fall back on what was asked.
+    if kind == "refund":
+        return _phrase_refund(payload)
+    if kind == "escalation":
+        return (
+            "I've passed this to a colleague who can help properly. "
+            "They'll be in touch shortly."
+        )
     return _phrase_order(payload)
 
 
@@ -213,19 +252,29 @@ class MockModel(Model):
             else [_as_dict(i) for i in input]
         )
 
-        # 1. A tool has already run this turn -> phrase its result and stop.
-        #    Handoff outputs are skipped: they carry no `outcome`, so they fall
-        #    through to routing/tool selection below, which is what should happen.
-        for item in reversed(items):
+        # 1. Everything the tools have already returned this turn, by kind.
+        #    Handoff outputs carry no `outcome`, so they are skipped here and fall
+        #    through to routing below, which is what should happen.
+        seen: dict[str, dict[str, Any]] = {}
+        attempted: set[str] = set()
+        rejections: list[str] = []
+        for item in items:
+            if item.get("type") == "function_call":
+                attempted.add(str(item.get("name") or ""))
+                continue
             if item.get("type") != "function_call_output":
                 continue
             raw = item.get("output")
             try:
                 payload = json.loads(raw) if isinstance(raw, str) else raw
             except (TypeError, ValueError):
-                continue
+                payload = None
             if isinstance(payload, dict) and "outcome" in payload:
-                return self._say(_phrase(payload))
+                seen[_kind_of(payload)] = payload
+            elif isinstance(raw, str) and raw.strip():
+                # A tool guardrail rejected the call: the output is a plain
+                # sentence explaining why, not a typed result.
+                rejections.append(raw)
 
         user_text = " ".join(_text_of(i) for i in items if i.get("role") == "user")
         lowered = user_text.lower()
@@ -234,51 +283,96 @@ class MockModel(Model):
         if handoffs and not tools:
             return self._route(lowered, handoffs)
 
-        # 3. Specialist: pick the one tool that fits, call it once.
         available = {getattr(t, "name", "") for t in tools}
+        wants_refund = any(w in lowered for w in REFUND_WORDS)
 
+        # 3. Refund flow: check policy, verify identity, then attempt the refund.
+        #    Sequenced deliberately — refund_processor's guardrail refuses unless
+        #    order_lookup has already verified this order in this run.
+        if "refund_processor" in available and wants_refund:
+            # A blocked refund must never be retried. Without this the guardrail
+            # rejects, the model tries again, and the run spins until max turns —
+            # which is a denial of service dressed up as persistence.
+            if "refund_processor" in attempted and "refund" not in seen:
+                return self._say(
+                    "I wasn't able to put that refund through. "
+                    f"{rejections[-1] if rejections else ''} "
+                    "Let me get a colleague to pick this up with you."
+                )
+            step = self._refund_step(seen, user_text)
+            if step is not None:
+                return step
+
+        # 4. A terminal tool result -> phrase it.
+        for kind in ("refund", "escalation", "products", "policy", "order"):
+            if kind in seen:
+                return self._say(_phrase(seen[kind]))
+
+        # 5. Otherwise pick the one tool that fits and call it.
         if "policy_retriever" in available and any(w in lowered for w in POLICY_WORDS):
-            return ModelResponse(
-                output=[_call("policy_retriever", {"question": user_text})],
-                usage=Usage(),
-                response_id=None,
-            )
+            return self._tool("policy_retriever", {"question": user_text})
 
         if "order_lookup" in available:
             order = ORDER_RE.search(user_text)
             email = EMAIL_RE.search(user_text)
             if order and email:
-                return ModelResponse(
-                    output=[
-                        _call(
-                            "order_lookup",
-                            {
-                                "order_id": f"ORD-{order.group(1)}",
-                                "email": email.group(0),
-                            },
-                        )
-                    ],
-                    usage=Usage(),
-                    response_id=None,
+                return self._tool(
+                    "order_lookup",
+                    {"order_id": f"ORD-{order.group(1)}", "email": email.group(0)},
                 )
             if order or "order" in lowered:
                 return self._say(ASK_FOR_DETAILS)
 
         if "product_catalog" in available:
-            return ModelResponse(
-                output=[_call("product_catalog", {"query": user_text})],
-                usage=Usage(),
-                response_id=None,
-            )
+            return self._tool("product_catalog", {"query": user_text})
 
         if "policy_retriever" in available:
-            return ModelResponse(
-                output=[_call("policy_retriever", {"question": user_text})],
-                usage=Usage(),
-                response_id=None,
-            )
+            return self._tool("policy_retriever", {"question": user_text})
 
         return self._say(FALLBACK)
+
+    def _refund_step(
+        self, seen: dict[str, dict[str, Any]], user_text: str
+    ) -> ModelResponse | None:
+        """Next step of the refund chain, or None to fall through."""
+        if "refund" in seen:
+            return self._say(_phrase_refund(seen["refund"]))
+
+        # Ground the ruling in the written policy first.
+        if "policy" not in seen:
+            return self._tool("policy_retriever", {"question": user_text})
+
+        # Then prove who we are talking to.
+        order_result = seen.get("order")
+        if order_result is None:
+            order = ORDER_RE.search(user_text)
+            email = EMAIL_RE.search(user_text)
+            if order and email:
+                return self._tool(
+                    "order_lookup",
+                    {"order_id": f"ORD-{order.group(1)}", "email": email.group(0)},
+                )
+            return self._say(ASK_FOR_DETAILS)
+
+        if order_result.get("outcome") != "found":
+            return self._say(_phrase_order(order_result))
+
+        # Identity proven and policy read: attempt the refund for the full total.
+        # Whether it executes, pauses for a human or is refused is not ours to decide.
+        order = order_result.get("order") or {}
+        return self._tool(
+            "refund_processor",
+            {
+                "order_id": order.get("order_id"),
+                "amount": float(order.get("total", 0)),
+                "reason": "Customer requested a refund",
+            },
+        )
+
+    def _tool(self, name: str, arguments: dict[str, Any]) -> ModelResponse:
+        return ModelResponse(
+            output=[_call(name, arguments)], usage=Usage(), response_id=None
+        )
 
     def _route(self, lowered: str, handoffs: list[Any]) -> ModelResponse:
         by_agent = {getattr(h, "agent_name", ""): h for h in handoffs}

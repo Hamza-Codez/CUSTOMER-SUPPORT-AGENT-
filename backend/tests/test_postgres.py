@@ -10,6 +10,8 @@ Run with:  uv run pytest tests/test_postgres.py -v
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 from dotenv import dotenv_values
 
@@ -190,6 +192,207 @@ class TestAuditPersistence:
         entry = (await pg.recent_audit("biz_demo", limit=1))[0]
         assert isinstance(entry.detail, dict)
         assert entry.detail["supplied_email"] == "nope@example.com"
+
+
+class TestMoneyAndEscalationsInPostgres:
+    """The refund and escalation tables carry the safety guarantees, so the
+    guarantees have to hold in SQL and not only in the in-memory store."""
+
+    async def test_a_duplicate_refund_is_refused_by_the_database(self, pg):
+        import uuid
+
+        from app.db.base import RefundRecord
+
+        order_id = f"ORD-DUP-{uuid.uuid4().hex[:6]}"
+        first = RefundRecord(
+            refund_id=f"ref_{uuid.uuid4().hex[:8]}",
+            business_id="biz_demo",
+            order_id=order_id,
+            amount="19.99",
+            reason="pg test",
+            status="executed",
+        )
+        assert await pg.create_refund(first) is True
+
+        second = RefundRecord(**{**first.__dict__, "refund_id": f"ref_{uuid.uuid4().hex[:8]}"})
+        assert await pg.create_refund(second) is False
+
+        stored = await pg.get_refund("biz_demo", order_id)
+        assert stored.refund_id == first.refund_id
+        assert stored.amount == "19.99"
+
+    async def test_an_escalation_round_trips_with_its_jsonb(self, pg):
+        import uuid
+
+        from app.db.base import EscalationRecord
+
+        escalation_id = f"esc_{uuid.uuid4().hex[:8]}"
+        await pg.create_escalation(
+            EscalationRecord(
+                escalation_id=escalation_id,
+                business_id="biz_demo",
+                session_id="pg-sess",
+                status="pending",
+                decision_card={"request": "Refund 149.00", "options": ["approve"]},
+                run_state={"$schemaVersion": "test", "nested": {"a": [1, 2]}},
+            )
+        )
+        got = await pg.get_escalation("biz_demo", escalation_id)
+        assert got.decision_card["request"] == "Refund 149.00"
+        assert got.run_state["nested"]["a"] == [1, 2]
+
+    async def test_only_one_operator_can_resolve_a_card(self, pg):
+        """Compare-and-set in SQL: the second Approve must lose."""
+        import uuid
+
+        from app.db.base import EscalationRecord
+
+        escalation_id = f"esc_{uuid.uuid4().hex[:8]}"
+        await pg.create_escalation(
+            EscalationRecord(
+                escalation_id=escalation_id,
+                business_id="biz_demo",
+                session_id="pg-race",
+                status="pending",
+                decision_card={},
+            )
+        )
+        first = await pg.resolve_escalation(
+            "biz_demo", escalation_id, "approved", "operator:a"
+        )
+        second = await pg.resolve_escalation(
+            "biz_demo", escalation_id, "approved", "operator:b"
+        )
+        assert first is True
+        assert second is False
+        assert (await pg.get_escalation("biz_demo", escalation_id)).resolved_by == "operator:a"
+
+    async def test_the_queue_is_tenant_scoped(self, pg):
+        import uuid
+
+        from app.db.base import EscalationRecord
+
+        marker = uuid.uuid4().hex[:8]
+        await pg.create_escalation(
+            EscalationRecord(
+                escalation_id=f"esc_{marker}",
+                business_id="biz_other",
+                session_id="s",
+                status="pending",
+                decision_card={"request": marker},
+            )
+        )
+        mine = await pg.list_escalations("biz_demo", status="pending")
+        assert all(e.escalation_id != f"esc_{marker}" for e in mine)
+
+
+class TestRefundEligibilityAgainstPostgres:
+    async def test_the_seeded_recent_order_is_auto_refundable(self, pg):
+        """ORD-1005's dates are reset relative to current_date by seed.sql, so the
+        auto-execute path stays reachable however long ago the database was set up."""
+        from app.core.config import get_settings
+        from app.guardrails.refund_guard import approval_reasons
+
+        settings = get_settings()
+        record = await pg.get_order("biz_demo", "ORD-1005")
+        assert record is not None
+        assert approval_reasons(
+            record,
+            float(record.total),
+            cap=settings.auto_refund_cap,
+            window_days=settings.refund_window_days,
+        ) == []
+
+    async def test_the_old_order_is_outside_the_window(self, pg):
+        from app.guardrails.refund_guard import approval_reasons
+
+        record = await pg.get_order("biz_demo", "ORD-1003")
+        reasons = approval_reasons(record, 89.00, cap=25.0, window_days=30)
+        assert "outside_refund_window" in reasons
+
+
+class TestApprovalLoopOnPostgres:
+    """The whole human-approval loop, over HTTP, against the real database.
+
+    This exists because the loop passed every in-memory test and still failed on
+    Postgres: serialising the paused run deep-copies the tenant context, which
+    there holds a live asyncpg pool, so `to_json` raised and the escalation was
+    stored with no run state. Approving then recorded a decision that could never
+    execute. A store-agnostic test could not have caught it.
+    """
+
+    async def test_pause_then_approve_actually_pays(self, pg):
+        import uuid
+
+        from fastapi.testclient import TestClient
+
+        from app.db import set_store
+        from app.db.postgres_store import PostgresStore
+        from app.main import app
+
+        session_id = f"pg-approve-{uuid.uuid4().hex[:6]}"
+        async with _clean_refund(pg, "ORD-1001"):
+            # Its own store instance: the app lifespan closes whatever it is given,
+            # and the `pg` fixture's pool is still needed by other tests.
+            own = PostgresStore(DSN)
+            set_store(own)
+            try:
+                with TestClient(app) as client:
+                    body = client.post(
+                        "/chat",
+                        json={
+                            "message": "refund ORD-1001, email ayesha.k@example.com",
+                            "session_id": session_id,
+                        },
+                        headers={"Authorization": "Bearer demo-token"},
+                    ).json()
+                    assert "approval_pending" in [a["kind"] for a in body["actions"]]
+                    assert await pg.get_refund("biz_demo", "ORD-1001") is None
+
+                    cards = client.get(
+                        "/dashboard/escalations?status_filter=pending",
+                        headers={"Authorization": "Bearer ops-token"},
+                    ).json()["escalations"]
+                    card = next(
+                        c
+                        for c in cards
+                        if c["proposed_action"].get("order_id") == "ORD-1001"
+                    )
+
+                    stored = await pg.get_escalation("biz_demo", card["escalation_id"])
+                    assert stored.run_state, "run state was not persisted"
+
+                    decision = client.post(
+                        f"/escalations/{card['escalation_id']}/decision",
+                        json={"decision": "approve"},
+                        headers={"Authorization": "Bearer ops-token"},
+                    ).json()
+                    assert decision["status"] == "approved"
+                    assert decision["outcome"] == "resumed"
+
+                paid = await pg.get_refund("biz_demo", "ORD-1001")
+                assert paid is not None
+                assert paid.amount == "149.00"
+            finally:
+                set_store(None)
+
+
+@asynccontextmanager
+async def _clean_refund(pg, order_id: str):
+    """Remove any refund for this order before and after, so the test is repeatable."""
+    async with pg.pool.acquire() as conn:
+        await conn.execute(
+            "delete from fte.refunds where business_id='biz_demo' and order_id=$1",
+            order_id,
+        )
+    try:
+        yield
+    finally:
+        async with pg.pool.acquire() as conn:
+            await conn.execute(
+                "delete from fte.refunds where business_id='biz_demo' and order_id=$1",
+                order_id,
+            )
 
 
 class TestSessionPersistence:

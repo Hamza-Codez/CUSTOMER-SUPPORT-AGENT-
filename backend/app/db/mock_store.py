@@ -8,9 +8,24 @@ scenario it would test against Postgres.
 from __future__ import annotations
 
 import copy
+from datetime import date, timedelta
 from typing import Any
 
-from app.db.base import AuditEntry, OrderRecord, PolicyRecord, ProductRecord, Store
+# ORD-1005 is dated relative to today so the "small, recent, in-policy" refund
+# stays auto-approvable forever. A fixed date would quietly fall outside the
+# 30-day window and the auto-execute path would stop being demonstrable.
+_RECENT_DELIVERY = (date.today() - timedelta(days=5)).isoformat()
+_RECENT_PLACED = (date.today() - timedelta(days=10)).isoformat()
+
+from app.db.base import (
+    AuditEntry,
+    EscalationRecord,
+    OrderRecord,
+    PolicyRecord,
+    ProductRecord,
+    RefundRecord,
+    Store,
+)
 
 # Mirrors db/seed.sql. Keep the two in step: the demo scenarios depend on these
 # specific orders existing with these specific statuses.
@@ -66,6 +81,22 @@ SEED_ORDERS: list[OrderRecord] = [
         eta="2026-08-01",
         item_count=3,
         total="420.00",
+    ),
+    # Small, recent and in policy: the only order that can be refunded without a
+    # human. Every other seeded order exceeds the £25 auto-cap or falls outside
+    # the refund window, so without this the auto-execute path is unreachable.
+    OrderRecord(
+        order_id="ORD-1005",
+        business_id="biz_demo",
+        customer_email="ayesha.k@example.com",
+        customer_name="Ayesha K.",
+        status="delivered",
+        placed_at=_RECENT_PLACED,
+        carrier="Royal Mail",
+        tracking_number="RM4471200GB",
+        eta=_RECENT_DELIVERY,
+        item_count=1,
+        total="19.99",
     ),
     # A second tenant. Exists so cross-tenant isolation is actually testable
     # rather than merely asserted.
@@ -256,6 +287,8 @@ class MockStore(Store):
         self._policies = list(SEED_POLICIES)
         self._audit: list[AuditEntry] = []
         self._sessions: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        self._refunds: dict[tuple[str, str], RefundRecord] = {}
+        self._escalations: dict[tuple[str, str], EscalationRecord] = {}
 
     async def connect(self) -> None:
         return None
@@ -285,6 +318,51 @@ class MockStore(Store):
             (p for p in self._policies if p.business_id == business_id),
             key=lambda p: p.source_ref,
         )
+
+    async def create_refund(self, record: RefundRecord) -> bool:
+        key = (record.business_id, record.order_id)
+        if key in self._refunds:
+            return False
+        self._refunds[key] = record
+        return True
+
+    async def get_refund(self, business_id: str, order_id: str) -> RefundRecord | None:
+        return self._refunds.get((business_id, order_id))
+
+    async def create_escalation(self, record: EscalationRecord) -> None:
+        self._escalations[(record.business_id, record.escalation_id)] = record
+
+    async def list_escalations(
+        self, business_id: str, status: str | None = None, limit: int = 50
+    ) -> list[EscalationRecord]:
+        rows = [
+            e
+            for (biz, _), e in self._escalations.items()
+            if biz == business_id and (status is None or e.status == status)
+        ]
+        rows.sort(key=lambda e: e.created_at, reverse=True)
+        return rows[:limit]
+
+    async def get_escalation(
+        self, business_id: str, escalation_id: str
+    ) -> EscalationRecord | None:
+        return self._escalations.get((business_id, escalation_id))
+
+    async def resolve_escalation(
+        self,
+        business_id: str,
+        escalation_id: str,
+        status: str,
+        resolved_by: str,
+        reason: str | None = None,
+    ) -> bool:
+        record = self._escalations.get((business_id, escalation_id))
+        if record is None or record.status != "pending":
+            return False
+        record.status = status
+        record.resolved_by = resolved_by
+        record.resolution_reason = reason
+        return True
 
     async def write_audit(self, entry: AuditEntry) -> None:
         self._audit.append(entry)

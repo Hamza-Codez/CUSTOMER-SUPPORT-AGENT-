@@ -37,6 +37,7 @@ async def policy_retriever(
     colleague. Never state a policy this tool did not give you.
     """
     tenant = ctx.context
+    tenant.note_tool("policy_retriever")
     policies = await tenant.store.list_policies(tenant.business_id)
 
     matches = keyword.rank(
@@ -63,6 +64,9 @@ async def policy_retriever(
                 "Do not answer from your own knowledge."
             ),
         )
+
+    # The citations behind whatever the agent says next.
+    tenant.sources.extend(p.source_ref for p in matches)
 
     return PolicyLookupResult(
         outcome="found",

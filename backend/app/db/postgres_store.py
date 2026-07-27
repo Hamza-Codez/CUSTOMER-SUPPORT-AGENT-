@@ -14,7 +14,15 @@ from typing import Any
 
 import asyncpg
 
-from app.db.base import AuditEntry, OrderRecord, PolicyRecord, ProductRecord, Store
+from app.db.base import (
+    AuditEntry,
+    EscalationRecord,
+    OrderRecord,
+    PolicyRecord,
+    ProductRecord,
+    RefundRecord,
+    Store,
+)
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 SEED_PATH = Path(__file__).with_name("seed.sql")
@@ -173,6 +181,161 @@ class PostgresStore(Store):
             )
             for r in rows
         ]
+
+    # --- money and escalations -------------------------------------------------
+
+    async def create_refund(self, record: RefundRecord) -> bool:
+        async with self.pool.acquire() as conn:
+            # ON CONFLICT DO NOTHING turns the unique constraint into an answer
+            # rather than an exception: the caller learns this order was already
+            # refunded and can say so, instead of the run blowing up.
+            row = await conn.fetchrow(
+                """
+                insert into fte.refunds
+                    (refund_id, business_id, order_id, amount, reason, status, approved_by)
+                values ($1, $2, $3, $4, $5, $6, $7)
+                on conflict (business_id, order_id) do nothing
+                returning refund_id
+                """,
+                record.refund_id,
+                record.business_id,
+                record.order_id,
+                Decimal(record.amount),
+                record.reason,
+                record.status,
+                record.approved_by,
+            )
+        return row is not None
+
+    async def get_refund(self, business_id: str, order_id: str) -> RefundRecord | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                select refund_id, business_id, order_id, amount, reason, status, approved_by
+                  from fte.refunds
+                 where business_id = $1 and order_id = $2
+                """,
+                business_id,
+                order_id,
+            )
+        if row is None:
+            return None
+        return RefundRecord(
+            refund_id=row["refund_id"],
+            business_id=row["business_id"],
+            order_id=row["order_id"],
+            amount=_money(row["amount"]),
+            reason=row["reason"],
+            status=row["status"],
+            approved_by=row["approved_by"],
+        )
+
+    async def create_escalation(self, record: EscalationRecord) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into fte.escalations
+                    (escalation_id, business_id, session_id, status,
+                     decision_card, run_state, created_at)
+                values ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                record.escalation_id,
+                record.business_id,
+                record.session_id,
+                record.status,
+                record.decision_card,
+                record.run_state,
+                record.created_at,
+            )
+
+    def _escalation(self, row: Any) -> EscalationRecord:
+        return EscalationRecord(
+            escalation_id=row["escalation_id"],
+            business_id=row["business_id"],
+            session_id=row["session_id"],
+            status=row["status"],
+            decision_card=row["decision_card"] or {},
+            run_state=row["run_state"],
+            resolved_by=row["resolved_by"],
+            resolution_reason=row["resolution_reason"],
+            created_at=row["created_at"],
+        )
+
+    _ESCALATION_COLS = """
+        escalation_id, business_id, session_id, status, decision_card,
+        run_state, resolved_by, resolution_reason, created_at
+    """
+
+    async def list_escalations(
+        self, business_id: str, status: str | None = None, limit: int = 50
+    ) -> list[EscalationRecord]:
+        async with self.pool.acquire() as conn:
+            if status is None:
+                rows = await conn.fetch(
+                    f"""
+                    select {self._ESCALATION_COLS} from fte.escalations
+                     where business_id = $1
+                     order by created_at desc, id desc
+                     limit $2
+                    """,
+                    business_id,
+                    limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    f"""
+                    select {self._ESCALATION_COLS} from fte.escalations
+                     where business_id = $1 and status = $2
+                     order by created_at desc, id desc
+                     limit $3
+                    """,
+                    business_id,
+                    status,
+                    limit,
+                )
+        return [self._escalation(r) for r in rows]
+
+    async def get_escalation(
+        self, business_id: str, escalation_id: str
+    ) -> EscalationRecord | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                select {self._ESCALATION_COLS} from fte.escalations
+                 where business_id = $1 and escalation_id = $2
+                """,
+                business_id,
+                escalation_id,
+            )
+        return self._escalation(row) if row else None
+
+    async def resolve_escalation(
+        self,
+        business_id: str,
+        escalation_id: str,
+        status: str,
+        resolved_by: str,
+        reason: str | None = None,
+    ) -> bool:
+        async with self.pool.acquire() as conn:
+            # `and status = 'pending'` makes this a compare-and-set: two operators
+            # clicking Approve at once, only one wins, and only one refund happens.
+            row = await conn.fetchrow(
+                """
+                update fte.escalations
+                   set status = $3, resolved_by = $4, resolution_reason = $5
+                 where business_id = $1
+                   and escalation_id = $2
+                   and status = 'pending'
+                returning escalation_id
+                """,
+                business_id,
+                escalation_id,
+                status,
+                resolved_by,
+                reason,
+            )
+        return row is not None
 
     # --- audit ----------------------------------------------------------------
 

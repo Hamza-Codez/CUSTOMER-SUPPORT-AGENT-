@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from agents import Agent
+from agents import Agent, ModelSettings
 from agents.models.interface import Model
 
 from app.core.auth import TenantContext
+from app.guardrails.grounding import must_be_grounded
 from app.tools.products import product_catalog
 
 HANDOFF_DESCRIPTION = (
@@ -41,5 +42,12 @@ def build_products_agent(model: Model) -> Agent[TenantContext]:
         handoff_description=HANDOFF_DESCRIPTION,
         instructions=PRODUCTS_PROMPT,
         tools=[product_catalog],
+        # Must retrieve before it speaks. `reset_tool_choice` (Agent default True)
+        # releases this after the first tool call, so it can still write the final
+        # reply — this forces a lookup, not a loop. Added because the live model
+        # answered from its own knowledge instead of calling its tool, which the
+        # grounding guardrail caught but only by withholding the answer entirely.
+        model_settings=ModelSettings(tool_choice="required"),
+        output_guardrails=[must_be_grounded],
         model=model,
     )

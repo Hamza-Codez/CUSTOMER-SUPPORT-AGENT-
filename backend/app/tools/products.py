@@ -31,6 +31,7 @@ async def product_catalog(
     say so rather than describing a product from memory.
     """
     tenant = ctx.context
+    tenant.note_tool("product_catalog")
     products = await tenant.store.list_products(tenant.business_id)
 
     matches = keyword.rank(

@@ -7,7 +7,7 @@ drift between layers.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -130,6 +130,69 @@ class PolicyLookupResult(BaseModel):
 
     def __str__(self) -> str:
         return _for_model(self)
+
+
+# --- Tool contract: refund_processor -----------------------------------------
+
+
+class RefundResult(BaseModel):
+    outcome: Literal["executed", "refused", "already_refunded"]
+    refund_id: str | None = None
+    amount: str | None = None
+    message: str
+
+    def __str__(self) -> str:
+        return _for_model(self)
+
+
+# --- Tool contract: human_escalation ------------------------------------------
+
+
+class EscalationResult(BaseModel):
+    outcome: Literal["escalated"]
+    escalation_id: str
+    message: str
+
+    def __str__(self) -> str:
+        return _for_model(self)
+
+
+# --- HTTP contract: the operator queue ----------------------------------------
+
+
+class DecisionCard(BaseModel):
+    """What an operator reads to decide in seconds.
+
+    Everything here was produced by a tool during the run, never by the model
+    asserting it — that is what makes it safe to act on with one click.
+    """
+
+    escalation_id: str
+    status: Literal["pending", "approved", "declined"]
+    created_at: str
+    customer: dict[str, Any] = {}
+    request: str = ""
+    policy_check: dict[str, Any] = {}
+    proposed_action: dict[str, Any] = {}
+    options: list[str] = ["approve", "decline"]
+    resolved_by: str | None = None
+    resolution_reason: str | None = None
+
+
+class EscalationList(BaseModel):
+    escalations: list[DecisionCard]
+
+
+class DecisionRequest(BaseModel):
+    decision: Literal["approve", "decline"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class DecisionResponse(BaseModel):
+    escalation_id: str
+    status: Literal["approved", "declined"]
+    outcome: str
+    customer_reply: str | None = None
 
 
 def _for_model(result: BaseModel) -> str:
