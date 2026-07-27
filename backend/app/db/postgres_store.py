@@ -24,6 +24,7 @@ from app.db.base import (
     PolicyRecord,
     ProductRecord,
     RefundRecord,
+    SiteKeyRecord,
     Store,
     UsageRecord,
     UsageSummary,
@@ -686,6 +687,75 @@ class PostgresStore(Store):
             role=row["role"],
             created_at=row["created_at"],
         )
+
+    # --- site keys ----------------------------------------------------------------
+
+    _SITE_KEY_COLS = """
+        key, business_id, label, allowed_origins, preview, created_at, revoked_at
+    """
+
+    @staticmethod
+    def _site_key(row: Any) -> SiteKeyRecord:
+        return SiteKeyRecord(
+            key=row["key"],
+            business_id=row["business_id"],
+            label=row["label"],
+            # asyncpg gives back a list for text[]; a NULL column would give None.
+            allowed_origins=list(row["allowed_origins"] or []),
+            preview=row["preview"],
+            created_at=row["created_at"],
+            revoked_at=row["revoked_at"],
+        )
+
+    async def create_site_key(self, record: SiteKeyRecord) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                insert into fte.site_keys ({self._SITE_KEY_COLS})
+                values ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                record.key,
+                record.business_id,
+                record.label,
+                record.allowed_origins,
+                record.preview,
+                record.created_at,
+                record.revoked_at,
+            )
+
+    async def get_site_key(self, key: str) -> SiteKeyRecord | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"select {self._SITE_KEY_COLS} from fte.site_keys where key = $1",
+                key,
+            )
+        return self._site_key(row) if row else None
+
+    async def list_site_keys(self, business_id: str) -> list[SiteKeyRecord]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                select {self._SITE_KEY_COLS} from fte.site_keys
+                 where business_id = $1
+                 order by created_at desc, key desc
+                """,
+                business_id,
+            )
+        return [self._site_key(r) for r in rows]
+
+    async def revoke_site_key(self, business_id: str, key: str) -> bool:
+        async with self.pool.acquire() as conn:
+            # The tenant check is in the WHERE clause rather than a read-then-write,
+            # so two operators racing cannot revoke each other's keys.
+            result = await conn.execute(
+                """
+                update fte.site_keys set revoked_at = now()
+                 where key = $1 and business_id = $2 and revoked_at is null
+                """,
+                key,
+                business_id,
+            )
+        return result.split()[-1] != "0"
 
     # --- commercial -------------------------------------------------------------
 

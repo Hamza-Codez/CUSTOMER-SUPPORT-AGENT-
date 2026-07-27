@@ -8,9 +8,11 @@ guardrails and tools, data belongs to `app/tools/`.
 from __future__ import annotations
 
 import logging
+import secrets
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 from agents import RunContextWrapper, Runner, RunState
 from agents.exceptions import (
@@ -19,14 +21,15 @@ from agents.exceptions import (
     OutputGuardrailTripwireTriggered,
 )
 from agents.items import HandoffOutputItem, ToolCallOutputItem
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from app.agents.orchestrator import get_entry_agent
 from app.comms.templates import render_thanks_page
+from app.comms.widget import render_widget_js
 from app.core import audit
-from app.core.auth import TenantContext, TenantDep
+from app.core.auth import SiteKeyDep, TenantContext, TenantDep
 from app.core.config import get_settings
 from app.core.security import (
     TOKEN_TTL,
@@ -40,6 +43,7 @@ from app.db.base import (
     FeedbackRecord,
     PolicyRecord,
     IntegrationRequest,
+    SiteKeyRecord,
     UsageRecord,
     UserRecord,
 )
@@ -47,6 +51,7 @@ from app.db.session_store import StoreSession
 from app.guardrails.input_guards import REDIRECT_MESSAGE
 from app.rag.embeddings import get_embedder
 from app.rag.parser import slugify
+from app.rag.site_scan import scan_site
 from app.handoffs.human_escalation import (
     build_decision_card,
     new_escalation,
@@ -80,7 +85,13 @@ from app.schemas import (
     OverviewResponse,
     PolicySummary,
     ProductSummary,
+    ScannedPageView,
     SignupRequest,
+    SiteKeyCreate,
+    SiteKeyList,
+    SiteKeyView,
+    SiteScanRequest,
+    SiteScanResult,
 )
 
 log = logging.getLogger("fte")
@@ -329,7 +340,13 @@ def collect_actions(result: Any) -> list[AgentAction]:
 
         # Which tool produced this is read off the payload's shape rather than
         # tracked separately — the result schemas are disjoint by construction.
-        if "products" in payload:
+        # GreetResult is tested first: it also carries only `outcome`/`message`
+        # plus a list, and the EmailResult test below would otherwise claim it.
+        if payload.get("outcome") == "greeted":
+            actions.append(
+                AgentAction(kind="greeted", label="Introduced itself", ref=None)
+            )
+        elif "products" in payload:
             actions.append(_product_action(payload))
         elif "passages" in payload:
             actions.append(_policy_action(payload))
@@ -378,6 +395,25 @@ async def load_verified_identity(tenant: TenantContext) -> None:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, tenant: TenantDep) -> ChatResponse:
+    return await _run_turn(req, tenant)
+
+
+@app.post("/chat/public", response_model=ChatResponse)
+async def chat_public(req: ChatRequest, tenant: SiteKeyDep) -> ChatResponse:
+    """The same turn, entered with a public site key instead of a session token.
+
+    Identical body on purpose — the widget on a seller's storefront must get the
+    same agent, the same guardrails and the same audit trail as the hosted
+    dashboard, or the thing being demonstrated is not the thing being sold.
+
+    All of the difference is in the dependency: `SiteKeyDep` yields a context
+    pinned to `role="customer"` and to the tenant the key belongs to, so nothing
+    reachable from here can read the operator queue or another business.
+    """
+    return await _run_turn(req, tenant)
+
+
+async def _run_turn(req: ChatRequest, tenant: TenantContext) -> ChatResponse:
     tenant.session_id = req.session_id
     await load_verified_identity(tenant)
     session = StoreSession(
@@ -670,6 +706,40 @@ async def me(tenant: TenantDep) -> AccountView:
     )
 
 
+@app.post("/onboarding/scan", response_model=SiteScanResult)
+async def onboarding_scan(
+    req: SiteScanRequest,
+    tenant: TenantContext = Depends(require_operator),
+) -> SiteScanResult:
+    """Read the seller's own storefront and propose the policy pages on it.
+
+    Nothing is stored here. This returns candidates and the text we would ingest;
+    the seller picks, and `/onboarding/context` does the writing. Splitting the
+    two is the whole safeguard — what the agent may quote at a customer should
+    never be decided by a heuristic that ran unattended.
+    """
+    report = await scan_site(req.url)
+    await audit.record(
+        tenant,
+        action="site_scan",
+        target=report.site[:120],
+        outcome="found" if report.pages else "no_match",
+        pages=len(report.pages),
+        skipped=len(report.skipped),
+    )
+    return SiteScanResult(
+        site=report.site,
+        pages=[
+            ScannedPageView(
+                url=p.url, title=p.title, topic=p.topic, text=p.text, matched=p.matched
+            )
+            for p in report.pages
+        ],
+        skipped=[[url, reason] for url, reason in report.skipped],
+        note=report.note,
+    )
+
+
 @app.post("/onboarding/context", response_model=OnboardingResult, status_code=201)
 async def onboarding_context(
     req: OnboardingContext,
@@ -756,6 +826,129 @@ async def request_integration(
             "embedding the FTE on your site."
         ),
     )
+
+
+@app.get("/widget.js")
+async def widget_js() -> Response:
+    """The embeddable widget.
+
+    Unauthenticated by design: it is a static script that any storefront may
+    fetch, and it carries no data. The credential is the `data-fte-key` on the
+    seller's own script tag, and it is checked when the widget calls
+    `/chat/public`, not here.
+    """
+    return Response(
+        content=render_widget_js(),
+        media_type="application/javascript; charset=utf-8",
+        # Short, so a fix reaches embedded sites the same day, but long enough
+        # that a busy storefront is not refetching it every page view.
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+# --- site keys -----------------------------------------------------------------
+
+
+def _normalise_origin(raw: str) -> str:
+    """A bare domain into a comparable origin.
+
+    Sellers type "mystore.com", browsers send "https://mystore.com". Normalising
+    here rather than at comparison time means the stored value is the exact
+    string the browser will present, and the check stays a set membership test
+    with no clever matching in it.
+    """
+    value = raw.strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlsplit(value)
+    if not parsed.netloc:
+        return ""
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+def _site_key_view(record: SiteKeyRecord) -> SiteKeyView:
+    base = get_settings().public_base_url.rstrip("/")
+    return SiteKeyView(
+        key=record.key,
+        label=record.label,
+        allowed_origins=list(record.allowed_origins),
+        preview=record.preview,
+        active=record.active,
+        created_at=record.created_at.isoformat(),
+        revoked_at=record.revoked_at.isoformat() if record.revoked_at else None,
+        snippet=(
+            f'<script src="{base}/widget.js" '
+            f'data-fte-key="{record.key}" defer></script>'
+        ),
+    )
+
+
+@app.post("/site-keys", response_model=SiteKeyView, status_code=201)
+async def create_site_key(
+    req: SiteKeyCreate,
+    tenant: TenantContext = Depends(require_operator),
+) -> SiteKeyView:
+    """Mint a public key for this tenant's storefront.
+
+    Operator-only: this is the credential that lets a page talk to the agent, so
+    issuing one is a seller action, never something the widget can do for itself.
+    """
+    origins = [o for o in (_normalise_origin(o) for o in req.allowed_origins) if o]
+
+    # Fails closed rather than issuing a key that works everywhere. A preview key
+    # is the deliberate exception — it exists to run on a page the seller cannot
+    # edit, which is exactly the case where no origin can be declared up front.
+    if not origins and not req.preview:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "A production site key needs at least one allowed origin, e.g. "
+                "https://yourstore.com. Pass preview=true for a key that accepts "
+                "any origin."
+            ),
+        )
+
+    record = SiteKeyRecord(
+        # `pk_` so a key is recognisable as public on sight, in a log or a paste.
+        key=f"pk_{secrets.token_urlsafe(24)}",
+        business_id=tenant.business_id,
+        label=req.label.strip(),
+        allowed_origins=origins,
+        preview=req.preview,
+    )
+    await tenant.store.create_site_key(record)
+    await audit.record(
+        tenant,
+        action="site_key_created",
+        target=record.key[:12],
+        outcome="preview" if record.preview else "production",
+        origins=origins,
+    )
+    return _site_key_view(record)
+
+
+@app.get("/site-keys", response_model=SiteKeyList)
+async def list_site_keys(
+    tenant: TenantContext = Depends(require_operator),
+) -> SiteKeyList:
+    records = await tenant.store.list_site_keys(tenant.business_id)
+    return SiteKeyList(keys=[_site_key_view(r) for r in records])
+
+
+@app.delete("/site-keys/{key}", status_code=204)
+async def revoke_site_key(
+    key: str,
+    tenant: TenantContext = Depends(require_operator),
+) -> Response:
+    revoked = await tenant.store.revoke_site_key(tenant.business_id, key)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="No live key with that id.")
+    await audit.record(
+        tenant, action="site_key_revoked", target=key[:12], outcome="revoked"
+    )
+    return Response(status_code=204)
 
 
 @app.get("/dashboard/integrations", response_model=IntegrationRequestList)

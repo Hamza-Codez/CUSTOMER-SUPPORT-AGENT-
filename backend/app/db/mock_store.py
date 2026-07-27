@@ -8,7 +8,7 @@ scenario it would test against Postgres.
 from __future__ import annotations
 
 import copy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.db.base import (
@@ -21,6 +21,7 @@ from app.db.base import (
     PolicyRecord,
     ProductRecord,
     RefundRecord,
+    SiteKeyRecord,
     Store,
     UsageRecord,
     UsageSummary,
@@ -264,6 +265,7 @@ class MockStore(Store):
         self._feedback: dict[str, FeedbackRecord] = {}
         self._verifications: dict[tuple[str, str, str], VerificationRecord] = {}
         self._integrations: list[IntegrationRequest] = []
+        self._site_keys: dict[str, SiteKeyRecord] = {}
         self._usage: list[UsageRecord] = []
         self._businesses: dict[str, str] = {"biz_demo": "Aeron Home Goods",
                                             "biz_other": "Unrelated Seller"}
@@ -464,6 +466,26 @@ class MockStore(Store):
 
     async def get_user_by_email(self, email: str) -> UserRecord | None:
         return self._users.get(email.casefold())
+
+    async def create_site_key(self, record: SiteKeyRecord) -> None:
+        self._site_keys[record.key] = record
+
+    async def get_site_key(self, key: str) -> SiteKeyRecord | None:
+        return self._site_keys.get(key)
+
+    async def list_site_keys(self, business_id: str) -> list[SiteKeyRecord]:
+        rows = [k for k in self._site_keys.values() if k.business_id == business_id]
+        rows.sort(key=lambda k: k.created_at, reverse=True)
+        return rows
+
+    async def revoke_site_key(self, business_id: str, key: str) -> bool:
+        record = self._site_keys.get(key)
+        # Scoped on the way in: one tenant must not be able to revoke another's
+        # key by guessing it, and a key that is already revoked is not news.
+        if record is None or record.business_id != business_id or not record.active:
+            return False
+        record.revoked_at = datetime.now(timezone.utc)
+        return True
 
     async def create_integration_request(self, record: IntegrationRequest) -> None:
         self._integrations.append(record)

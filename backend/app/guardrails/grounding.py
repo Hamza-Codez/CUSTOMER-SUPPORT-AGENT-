@@ -21,9 +21,19 @@ from agents import GuardrailFunctionOutput, RunContextWrapper, output_guardrail
 
 from app.core.auth import TenantContext
 
-# Agents whose entire job is to route. They hold no tools, so any final answer
-# they produce is necessarily ungrounded.
+# Agents whose job is to route. Any final answer they produce is ungrounded
+# unless it came from one of the tools listed below.
 ROUTING_AGENTS = {"Orchestrator"}
+
+# The exception, and the only one. `greet` returns authored text — a fixed
+# welcome and the list of jobs the agent can actually do — so an Orchestrator
+# reply that follows it is grounded in the same sense a policy answer is: it is
+# repeating a tool result rather than composing one.
+#
+# This is a narrow hole on purpose. Widening it re-opens the failure this whole
+# guardrail exists for, where the Orchestrator answered a product question with
+# invented prices.
+ROUTING_AGENT_TOOLS = {"greet"}
 
 # Agents that must consult a tool before asserting anything.
 GROUNDED_AGENTS = {"Support", "Products", "Refunds", "Orders"}
@@ -55,13 +65,21 @@ def is_clarifying_question(reply: str) -> bool:
 def evaluate(agent_name: str, reply: str, tools_used: list[str]) -> str | None:
     """Return a reason to trip, or None. Pure function so it is directly testable."""
     if agent_name in ROUTING_AGENTS:
+        if set(tools_used) & ROUTING_AGENT_TOOLS:
+            return None
         # It should have handed off. Reaching here at all means it answered.
         return (
-            f"{agent_name} produced a final answer but holds no tools, so nothing "
-            "it said is grounded in store data."
+            f"{agent_name} produced a final answer without handing off or calling "
+            "a permitted tool, so nothing it said is grounded in store data."
         )
 
-    if agent_name in GROUNDED_AGENTS and not tools_used:
+    # `greet` is evidence that triage said hello. It is not evidence that anyone
+    # checked an order or a policy, so it does not count towards a specialist's
+    # grounding — otherwise a run that greeted and then handed off would let the
+    # specialist assert anything it liked.
+    evidence = [t for t in tools_used if t not in ROUTING_AGENT_TOOLS]
+
+    if agent_name in GROUNDED_AGENTS and not evidence:
         if is_clarifying_question(reply):
             return None
         return (

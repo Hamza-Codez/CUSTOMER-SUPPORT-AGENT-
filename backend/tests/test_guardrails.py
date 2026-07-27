@@ -73,10 +73,24 @@ class TestGrounding:
             tools_used=[],
         )
         assert reason is not None
-        assert "no tools" in reason
+        assert "without handing off" in reason
 
     def test_a_routing_agent_answering_is_blocked_even_if_it_ran_something(self):
         assert evaluate("Orchestrator", "Anything at all.", ["policy_retriever"])
+
+    def test_a_routing_agent_may_answer_after_greeting(self):
+        """The one permitted exception: `greet` returns authored text."""
+        assert evaluate("Orchestrator", "Hello — I'm the assistant.", ["greet"]) is None
+
+    def test_greeting_does_not_ground_a_specialist(self):
+        """The hole opened by the exception above, closed.
+
+        A run that greeted and then handed off leaves "greet" in tools_used. That
+        must not read as evidence the specialist checked anything.
+        """
+        reason = evaluate("Support", "Our returns window is 60 days.", ["greet"])
+        assert reason is not None
+        assert "without calling any tool" in reason
 
     def test_a_specialist_answering_with_no_tool_is_blocked(self):
         reason = evaluate("Support", "Our returns window is 60 days.", tools_used=[])

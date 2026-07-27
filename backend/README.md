@@ -231,6 +231,37 @@ Checked against the real thing on 2026-07-26, not assumed:
 | **Gemini: over-cap refund paused**, no money moved | **confirmed** |
 | **Gemini: injection blocked**, ungrounded answer withheld | **confirmed** |
 
+Added 2026-07-27, probed against a live `uvicorn` on real PostgreSQL:
+
+| What | Result |
+|---|---|
+| **418 tests**, mock and PostgreSQL, no skips | pass |
+| **"Hi" is greeted**, naming the store and its four jobs | pass |
+| "hi, where is my order ORD-1002?" still routes to Orders | pass |
+| **Site key minted live**, snippet returned with the key baked in | pass |
+| **Widget endpoint answers a real order lookup** — ORD-1002, carrier, tracking, ETA | pass |
+| Site key used from an unlisted origin | **403** |
+| Site key presented as a bearer token on the operator queue | **401** |
+| A production key with no allowed origins | **refused at creation** |
+| `/widget.js` served, 8.7 KB, API base baked in | pass |
+| **Crawler against two real storefronts** — allbirds.com returned its returns/exchanges page | pass |
+
+**Not verified: the widget inside a real storefront.** `/widget.js` is served,
+its endpoint is exercised, and the script is checked for the things that would
+make it unsafe on someone else's page (no `innerHTML`, no `document.write`). But
+no browser has ever loaded it: there isn't one in this environment. Whether the
+launcher renders correctly, whether the shadow root holds up against a hostile
+stylesheet, and whether a strict content-security policy blocks it are all
+unproven. The same goes for the bookmarklet.
+
+**Known limit of the site crawler.** It reads the pages linked from the URL you
+give it and goes no deeper. Measured on two real storefronts: allbirds.com
+returned its returns and exchanges pages; gymshark.com returned only terms and
+privacy, because its shipping and returns pages live in a help centre that the
+front page does not link to directly. The UI says what it found and what it
+skipped, and the seller can still paste anything missing — but "point it at your
+homepage and you're done" is not a promise this keeps for every store.
+
 **Not verified: real SMTP delivery.** `EMAIL_PROVIDER=smtp` has never sent a
 message through an actual mail server — there are no credentials here. The
 `SmtpMailer` failure path *is* exercised for real (a connection to a port nothing

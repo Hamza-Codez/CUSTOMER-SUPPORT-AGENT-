@@ -63,7 +63,7 @@ class TestRouting:
 
     def test_an_unclassifiable_message_still_routes_somewhere(self, client):
         """Never a dead end: Support is the safe default."""
-        body = send(client, "hello there", session_id="vague")
+        body = send(client, "I have a question about something", session_id="vague")
         assert routed_to(body) is not None
 
     def test_the_handoff_is_visible_to_the_ui(self, client):

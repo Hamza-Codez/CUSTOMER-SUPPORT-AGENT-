@@ -282,6 +282,30 @@ create table if not exists fte.users (
 
 create index if not exists users_business_idx on fte.users (business_id);
 
+-- Public credentials that ship inside a storefront's HTML. Weakest thing we
+-- issue: it can start a customer conversation and nothing else.
+--
+-- `key` is the primary lookup and is not tenant-scoped in the query — the key is
+-- what establishes the tenant, so it cannot be scoped by it. `allowed_origins`
+-- is what makes lifting the key out of someone's page source useless: a
+-- production key with no origins recorded is refused everywhere.
+--
+-- Revoked keys are kept. A key that appears in an audit entry has to stay
+-- resolvable or the entry stops explaining itself.
+create table if not exists fte.site_keys (
+    id              bigserial primary key,
+    key             text        not null unique,
+    business_id     text        not null references fte.businesses (id) on delete cascade,
+    label           text        not null default '',
+    allowed_origins text[]      not null default '{}',
+    preview         boolean     not null default false,
+    created_at      timestamptz not null default now(),
+    revoked_at      timestamptz
+);
+
+create index if not exists site_keys_business_idx
+    on fte.site_keys (business_id, created_at desc);
+
 -- --------------------------------------------------------------------------
 -- Additive migrations
 --

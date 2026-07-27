@@ -132,6 +132,31 @@ class PolicyLookupResult(BaseModel):
         return _for_model(self)
 
 
+# --- Tool contract: greet -----------------------------------------------------
+
+
+class GreetResult(BaseModel):
+    """The opening turn.
+
+    A greeting is not a routing failure, but until this existed it was treated as
+    one: the Orchestrator must call a tool, its only tools were handoffs, so "hi"
+    was forced into a specialist and came back as "I can't confirm that from your
+    documents". This gives a greeting somewhere to go.
+
+    The words are authored here rather than left to the model, for the usual
+    reason — a model improvising a welcome is a model improvising, and the first
+    sentence a customer reads is the one that sets what they expect it can do.
+    """
+
+    outcome: Literal["greeted"]
+    business_name: str
+    can_do: list[str] = []
+    message: str
+
+    def __str__(self) -> str:
+        return _for_model(self)
+
+
 # --- Tool contract: refund_processor -----------------------------------------
 
 
@@ -249,6 +274,66 @@ class OnboardingResult(BaseModel):
     passages: int
     source_refs: list[str]
     message: str
+
+
+class SiteScanRequest(BaseModel):
+    url: str = Field(min_length=3, max_length=300)
+
+
+class ScannedPageView(BaseModel):
+    url: str
+    title: str
+    topic: str
+    text: str
+    matched: str
+
+
+class SiteScanResult(BaseModel):
+    """What we found on the seller's own site, before anything is ingested.
+
+    `skipped` is part of the contract rather than an internal detail: "we found
+    two pages" reads very differently once you know four others failed, and a
+    page that could not be read is exactly the one the seller needs to paste in
+    by hand.
+    """
+
+    site: str
+    pages: list[ScannedPageView] = []
+    skipped: list[list[str]] = []
+    note: str = ""
+
+
+# --- HTTP contract: site keys --------------------------------------------------
+
+
+class SiteKeyCreate(BaseModel):
+    """What a seller sends to mint an embed key.
+
+    `allowed_origins` is required for a production key and validated on the way
+    in, because "we'll lock it down later" is how a public credential ends up
+    working from anywhere for the rest of its life.
+    """
+
+    label: str = Field(default="", max_length=120)
+    allowed_origins: list[str] = Field(default_factory=list, max_length=20)
+    preview: bool = False
+
+
+class SiteKeyView(BaseModel):
+    key: str
+    label: str
+    allowed_origins: list[str]
+    preview: bool
+    active: bool
+    created_at: str
+    revoked_at: str | None = None
+    # The exact line to paste. Assembled server-side so the key, the origin and
+    # the script URL cannot disagree with each other in a copied snippet.
+    snippet: str
+
+
+class SiteKeyList(BaseModel):
+    keys: list[SiteKeyView]
 
 
 # --- HTTP contract: integrations ----------------------------------------------

@@ -27,6 +27,7 @@ from app.core.auth import TenantContext
 from app.core.model import gemini_model
 from app.guardrails.grounding import must_be_grounded
 from app.guardrails.input_guards import scope_and_safety
+from app.tools.greet import greet
 
 TRIAGE_PROMPT = """
 You are the triage coordinator for an online store's support team. You do not
@@ -40,9 +41,14 @@ Route on what the customer actually wants:
 - How the store works in general: delivery times, dispatch, warranty,
   how returns work as a rule -> Support
 
+The one thing you handle yourself:
+- A bare greeting, a thank you, a goodbye, or "what can you do?" -> call the
+  `greet` tool and reply with what it gives you.
+
 Rules:
 - Hand off on the first message. Do not ask a clarifying question first unless
   the request is genuinely impossible to place.
+- A message that says hello *and* asks for something is not a greeting. Route it.
 - If a message covers two things, route to the one the customer led with.
 - Never answer a policy, product or order question yourself. You do not have the
   tools to check any of it, so anything you said would be a guess.
@@ -67,7 +73,10 @@ def get_entry_agent() -> Agent[TenantContext]:
     return Agent[TenantContext](
         name="Orchestrator",
         instructions=TRIAGE_PROMPT,
-        tools=[],
+        # The only thing triage answers itself, and it answers it from authored
+        # text. See app/tools/greet.py for why a greeting needed its own tool
+        # rather than being routed somewhere.
+        tools=[greet],
         handoffs=[support, orders, products, refunds],
         # Handoffs reach the model as tools, so requiring a tool call makes
         # routing the only move available. The prompt above already said "never

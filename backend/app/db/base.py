@@ -164,6 +164,59 @@ class UserRecord:
 
 
 @dataclass
+class SiteKeyRecord:
+    """A public credential a storefront can hold.
+
+    This is the only credential that ships to a browser we do not control, so it
+    is deliberately the weakest one we issue: it can start a customer conversation
+    and nothing else. It cannot read the operator queue, approve a refund, or see
+    another tenant — and unlike a session token it names the origins allowed to
+    use it, so lifting the key out of someone's page source does not hand you a
+    working client.
+
+    `revoked_at` rather than a delete: a key that appeared in an audit log must
+    stay resolvable, or the log stops explaining itself.
+    """
+
+    key: str
+    business_id: str
+    label: str = ""
+    # Origins (scheme://host[:port]) permitted to use this key. Empty means the
+    # key has not been locked down yet — allowed only while `preview` is true.
+    allowed_origins: list[str] = field(default_factory=list)
+    # A preview key is what the bookmarklet uses: it runs on a page we cannot ask
+    # the seller to edit, so it accepts any origin and is expected to be short
+    # lived. Never issue one as the production embed.
+    preview: bool = False
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    revoked_at: datetime | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.revoked_at is None
+
+    def permits(self, origin: str | None) -> bool:
+        """Whether a request from `origin` may use this key.
+
+        A preview key permits anything by design. A production key with no
+        origins recorded permits nothing — failing closed, because the alternative
+        is a key that silently works everywhere until someone remembers to
+        configure it.
+        """
+        if not self.active:
+            return False
+        if self.preview:
+            return True
+        if not self.allowed_origins:
+            return False
+        if origin is None:
+            return False
+        return origin.rstrip("/").lower() in {
+            o.rstrip("/").lower() for o in self.allowed_origins
+        }
+
+
+@dataclass
 class IntegrationRequest:
     request_id: str
     business_id: str
@@ -387,6 +440,28 @@ class Store(ABC):
     async def get_user_by_email(self, email: str) -> UserRecord | None:
         """Deliberately NOT tenant-scoped: login happens before we know which
         business someone belongs to. It is the one lookup that cannot be."""
+
+    # --- site keys ----------------------------------------------------------------
+
+    @abstractmethod
+    async def create_site_key(self, record: SiteKeyRecord) -> None: ...
+
+    @abstractmethod
+    async def get_site_key(self, key: str) -> SiteKeyRecord | None:
+        """Deliberately NOT tenant-scoped: the key is what establishes the tenant.
+
+        The same shape as `get_user_by_email`, and for the same reason — a
+        credential lookup cannot be scoped by the thing the credential proves.
+        """
+
+    @abstractmethod
+    async def list_site_keys(self, business_id: str) -> list[SiteKeyRecord]:
+        """Newest first, revoked ones included — a key that was live yesterday is
+        part of the record of what happened yesterday."""
+
+    @abstractmethod
+    async def revoke_site_key(self, business_id: str, key: str) -> bool:
+        """True if a live key belonging to this tenant was revoked."""
 
     # --- commercial -------------------------------------------------------------
 

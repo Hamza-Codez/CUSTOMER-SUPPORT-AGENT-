@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, Header, HTTPException, status
 
@@ -137,3 +138,68 @@ async def require_tenant(
 
 
 TenantDep = Annotated[TenantContext, Depends(require_tenant)]
+
+
+async def require_site_key(
+    x_fte_site_key: Annotated[str | None, Header()] = None,
+    origin: Annotated[str | None, Header()] = None,
+    referer: Annotated[str | None, Header()] = None,
+) -> TenantContext:
+    """Resolve a storefront visitor from a public site key.
+
+    Deliberately a separate dependency rather than another branch inside
+    `require_tenant`. That function mints operator contexts, and the one thing a
+    key embedded in a public web page must never be able to do is take a path
+    that ends in `role="operator"`. Keeping them apart makes that a property of
+    the code rather than of a conditional someone might later reorder.
+
+    The resulting context is pinned to `role="customer"`, so every operator-only
+    endpoint refuses it for the same reason it refuses a customer session.
+    """
+    if not x_fte_site_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing site key. Send it in the 'X-FTE-Site-Key' header.",
+        )
+
+    store = get_store()
+    record = await store.get_site_key(x_fte_site_key.strip())
+    if record is None or not record.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unknown or revoked site key.",
+        )
+
+    # Browsers send Origin on cross-origin POSTs. Referer is the fallback for the
+    # handful that omit it; it is a weaker signal, which is why the origin list is
+    # a defence in depth rather than the only one — the key still scopes to one
+    # tenant and one role no matter where the call came from.
+    caller = origin or (_origin_of(referer) if referer else None)
+    if not record.permits(caller):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"This site key is not authorised for {caller or 'an unknown origin'}. "
+                "Add the domain to the key's allowed origins."
+            ),
+        )
+
+    return TenantContext(
+        business_id=record.business_id,
+        role="customer",
+        # Names the key, not a person: there is no person on the other end of a
+        # storefront widget, and pretending otherwise would make the audit log lie.
+        actor=f"site_key:{record.key[:12]}",
+        store=store,
+    )
+
+
+def _origin_of(url: str) -> str | None:
+    """scheme://host[:port] from a full URL, or None if it isn't one."""
+    parsed = urlsplit(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+SiteKeyDep = Annotated[TenantContext, Depends(require_site_key)]

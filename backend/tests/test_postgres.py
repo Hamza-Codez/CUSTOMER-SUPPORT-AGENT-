@@ -776,3 +776,93 @@ class TestSessionPersistence:
         await mine.add_items([{"role": "user", "content": "private"}])
         assert await theirs.get_items() == []
         await mine.clear_session()
+
+
+class TestSiteKeysOnPostgres:
+    """The public credential, against the real database.
+
+    Parity matters more here than elsewhere: `allowed_origins` is a `text[]`,
+    which is the one column type where asyncpg and the in-memory store could
+    plausibly disagree — a list arriving back as a string would make `permits()`
+    match on substrings instead of whole origins.
+    """
+
+    async def test_a_key_round_trips_with_its_origins_intact(self, pg):
+        import uuid
+
+        from app.db.base import SiteKeyRecord
+
+        key = f"pk_{uuid.uuid4().hex}"
+        await pg.create_site_key(
+            SiteKeyRecord(
+                key=key,
+                business_id="biz_demo",
+                label="Storefront",
+                allowed_origins=["https://aeron.example.com"],
+            )
+        )
+        found = await pg.get_site_key(key)
+        assert found is not None
+        assert found.business_id == "biz_demo"
+        assert found.allowed_origins == ["https://aeron.example.com"]
+        assert found.active is True
+        assert found.permits("https://aeron.example.com")
+        assert not found.permits("https://evil.example")
+
+    async def test_revoking_is_tenant_scoped(self, pg):
+        """Another tenant guessing the key must not be able to revoke it."""
+        import uuid
+
+        from app.db.base import SiteKeyRecord
+
+        key = f"pk_{uuid.uuid4().hex}"
+        await pg.create_site_key(
+            SiteKeyRecord(
+                key=key,
+                business_id="biz_demo",
+                allowed_origins=["https://aeron.example.com"],
+            )
+        )
+        assert await pg.revoke_site_key("biz_other", key) is False
+        assert (await pg.get_site_key(key)).active is True
+
+        assert await pg.revoke_site_key("biz_demo", key) is True
+        revoked = await pg.get_site_key(key)
+        assert revoked.active is False
+        assert revoked.permits("https://aeron.example.com") is False
+
+    async def test_revoking_twice_reports_no_change(self, pg):
+        import uuid
+
+        from app.db.base import SiteKeyRecord
+
+        key = f"pk_{uuid.uuid4().hex}"
+        await pg.create_site_key(
+            SiteKeyRecord(key=key, business_id="biz_demo", preview=True)
+        )
+        assert await pg.revoke_site_key("biz_demo", key) is True
+        assert await pg.revoke_site_key("biz_demo", key) is False
+
+    async def test_keys_are_listed_per_tenant(self, pg):
+        import uuid
+
+        from app.db.base import SiteKeyRecord
+
+        marker = f"pk_{uuid.uuid4().hex}"
+        await pg.create_site_key(
+            SiteKeyRecord(key=marker, business_id="biz_other", preview=True)
+        )
+        keys = [k.key for k in await pg.list_site_keys("biz_demo")]
+        assert marker not in keys
+
+    async def test_a_preview_key_permits_any_origin(self, pg):
+        import uuid
+
+        from app.db.base import SiteKeyRecord
+
+        key = f"pk_{uuid.uuid4().hex}"
+        await pg.create_site_key(
+            SiteKeyRecord(key=key, business_id="biz_demo", preview=True)
+        )
+        found = await pg.get_site_key(key)
+        assert found.permits("https://anywhere.example")

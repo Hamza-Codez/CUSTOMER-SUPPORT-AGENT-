@@ -44,6 +44,21 @@ ROUTING = [
 
 REFUND_WORDS = ("refund", "money back", "reimburse", "send it back", "return this")
 
+# A message that is *only* a greeting. Matched on the whole message rather than
+# by substring, because "hi, where is my order" is an order question wearing a
+# hello, and routing it anywhere else would be the bug this replaced.
+GREETING_RE = re.compile(
+    r"^\W*("
+    r"hi|hey|hello|yo|hiya|howdy|"
+    r"good\s+(morning|afternoon|evening)|"
+    r"thanks?|thank\s+you|cheers|ta|"
+    r"bye|goodbye|see\s+you|"
+    r"what\s+can\s+you\s+do|who\s+are\s+you|are\s+you\s+(a\s+)?(bot|human|real)|"
+    r"help|start"
+    r")\W*(there|folks|team)?\W*$",
+    re.IGNORECASE,
+)
+
 SUMMARY_WORDS = (
     "email me", "send me a summary", "summary by email", "in writing",
     "email a summary", "confirmation email", "send a summary",
@@ -235,6 +250,10 @@ def _phrase_email(payload: dict[str, Any]) -> str:
 
 def _kind_of(payload: dict[str, Any]) -> str:
     """Which tool produced this. The result schemas are disjoint by construction."""
+    # Checked first: GreetResult also carries `message`, and the `outcome+message`
+    # test further down would otherwise claim it as an email.
+    if "can_do" in payload or payload.get("outcome") == "greeted":
+        return "greet"
     if "products" in payload:
         return "products"
     if "passages" in payload:
@@ -252,6 +271,8 @@ def _kind_of(payload: dict[str, Any]) -> str:
 
 def _phrase(payload: dict[str, Any]) -> str:
     kind = _kind_of(payload)
+    if kind == "greet":
+        return str(payload.get("message") or FALLBACK)
     if kind == "products":
         return _phrase_products(payload)
     if kind == "policy":
@@ -342,11 +363,18 @@ class MockModel(Model):
         history = " ".join(user_messages)
         lowered = latest.lower()
 
-        # 2. Routing agent (has handoffs, no tools of its own).
-        if handoffs and not tools:
-            return self._route(lowered, history.lower(), handoffs)
-
         available = {getattr(t, "name", "") for t in tools}
+
+        # 2. Routing agent — one that holds handoffs and no tools it could answer
+        #    with. `greet` does not count: it is authored text, not a lookup, so
+        #    triage still has nothing of its own to answer from. Orders holds a
+        #    handoff to Refunds *and* real tools, and must not land here.
+        if handoffs and not (available - {"greet"}):
+            if "greet" in seen:
+                return self._say(str(seen["greet"].get("message") or FALLBACK))
+            if "greet" in available and GREETING_RE.match(latest.strip()):
+                return self._tool("greet", {})
+            return self._route(lowered, history.lower(), handoffs)
         wants_refund = any(w in lowered for w in REFUND_WORDS)
 
         # 2b. An explicit request for a written summary. Checked before the other
