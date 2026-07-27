@@ -57,11 +57,11 @@ class TestPolicyRetrieval:
     @pytest.mark.parametrize(
         "question",
         [
-            "what is your policy on interstellar shipping to Mars?",
             "do you accept cryptocurrency?",
             "what is the capital of France?",
             "can I pay in instalments?",
             "do you offer gift wrapping?",
+            "who won the world cup in 1998?",
         ],
     )
     async def test_returns_nothing_rather_than_something_irrelevant(
@@ -69,6 +69,30 @@ class TestPolicyRetrieval:
     ):
         """A miss must be empty. Anything else licenses a confident wrong answer."""
         assert keyword.rank(question, policies, text_of=POLICY_TEXT, limit=2) == []
+
+    async def test_a_shipping_destination_question_surfaces_the_delivery_areas_passage(
+        self, policies
+    ):
+        """Once the documents cover a question, the honest answer is the passage.
+
+        This was previously a miss case: shipping to Mars had no answer in the
+        corpus, so returning nothing was correct. The shipping policy now has a
+        "Where we deliver" section, so the right behaviour changed with the
+        documents rather than with the code.
+
+        Asserted as membership, not as the top hit: which of two shipping-related
+        passages ranks first is settled by the hybrid retriever combining signals,
+        and that ordering is tested against `retrieve_policies` in
+        tests/test_knowledge.py. This layer only owns whether the passage is found
+        at all.
+        """
+        got = keyword.rank(
+            "what is your policy on interstellar shipping to Mars?",
+            policies,
+            text_of=POLICY_TEXT,
+            limit=3,
+        )
+        assert "shipping-policy.md#delivery-areas" in {p.source_ref for p in got}
 
     async def test_every_returned_passage_can_be_cited(self, policies):
         for p in policies:

@@ -11,12 +11,6 @@ import copy
 from datetime import date, timedelta
 from typing import Any
 
-# ORD-1005 is dated relative to today so the "small, recent, in-policy" refund
-# stays auto-approvable forever. A fixed date would quietly fall outside the
-# 30-day window and the auto-execute path would stop being demonstrable.
-_RECENT_DELIVERY = (date.today() - timedelta(days=5)).isoformat()
-_RECENT_PLACED = (date.today() - timedelta(days=10)).isoformat()
-
 from app.db.base import (
     AuditEntry,
     EscalationRecord,
@@ -26,6 +20,13 @@ from app.db.base import (
     RefundRecord,
     Store,
 )
+from app.rag.parser import parse_directory
+
+# ORD-1005 is dated relative to today so the "small, recent, in-policy" refund
+# stays auto-approvable forever. A fixed date would quietly fall outside the
+# 30-day window and the auto-execute path would stop being demonstrable.
+_RECENT_DELIVERY = (date.today() - timedelta(days=5)).isoformat()
+_RECENT_PLACED = (date.today() - timedelta(days=10)).isoformat()
 
 # Mirrors db/seed.sql. Keep the two in step: the demo scenarios depend on these
 # specific orders existing with these specific statuses.
@@ -204,76 +205,37 @@ SEED_PRODUCTS: list[ProductRecord] = [
     ),
 ]
 
-# Parsed passages of the seller's written policy. Every one carries a source_ref;
-# Phase 4's grounding guardrail refuses any answer that cannot cite one.
-SEED_POLICIES: list[PolicyRecord] = [
-    PolicyRecord(
-        business_id="biz_demo",
-        topic="Refund window",
-        text=(
-            "Refunds are available within 30 days of delivery, provided the item is "
-            "unused and in its original packaging. Refunds are issued to the original "
-            "payment method and take 5-10 business days to appear."
-        ),
-        source_ref="refund-policy.md#refund-window",
-    ),
-    PolicyRecord(
-        business_id="biz_demo",
-        topic="Damaged or faulty goods",
-        text=(
-            "If an item arrives damaged or develops a fault within 30 days, we replace "
-            "or refund it in full including original shipping. Photographs of the damage "
-            "help us process the claim faster, but are not required."
-        ),
-        source_ref="refund-policy.md#damaged-goods",
-    ),
-    PolicyRecord(
-        business_id="biz_demo",
-        topic="How to start a return",
-        text=(
-            "To return an item, contact support with your order number. We email a "
-            "prepaid return label. Returns are free for faulty goods; for change-of-mind "
-            "returns a 4.99 label fee is deducted from the refund."
-        ),
-        source_ref="returns-policy.md#starting-a-return",
-    ),
-    PolicyRecord(
-        business_id="biz_demo",
-        topic="Order processing and dispatch",
-        text=(
-            "Orders placed before 2pm on a working day are dispatched the same day. "
-            "Orders placed after 2pm, at weekends, or on public holidays are dispatched "
-            "the next working day."
-        ),
-        source_ref="shipping-policy.md#dispatch",
-    ),
-    PolicyRecord(
-        business_id="biz_demo",
-        topic="Delivery times and methods",
-        text=(
-            "Standard delivery takes 3-5 working days and is free over 50. Express "
-            "delivery takes 1-2 working days and costs 7.99. Large items such as desks "
-            "are delivered by a two-person carrier team on a booked slot."
-        ),
-        source_ref="shipping-policy.md#delivery-times",
-    ),
-    PolicyRecord(
-        business_id="biz_demo",
-        topic="Warranty cover",
-        text=(
-            "Desks and chairs carry a 5 year warranty on frames and mechanisms. "
-            "Accessories carry 1-2 years. Warranty covers manufacturing defects, not "
-            "accidental damage or normal wear."
-        ),
-        source_ref="warranty-policy.md#cover",
-    ),
-    PolicyRecord(
-        business_id="biz_other",
-        topic="Unrelated seller policy",
-        text="Belongs to another tenant and must never surface for biz_demo.",
-        source_ref="other-tenant.md#fixture",
-    ),
-]
+def _seed_policies() -> list[PolicyRecord]:
+    """Built by parsing app/db/knowledge/*.md — the same documents the Postgres
+    store ingests. The knowledge base has one source, the seller's documents; a
+    second copy as a Python literal would drift from them the first time someone
+    edited a policy and only updated one.
+    """
+    records = [
+        PolicyRecord(
+            business_id="biz_demo",
+            topic=p.topic,
+            text=p.text,
+            source_ref=p.source_ref,
+            doc=p.doc,
+        )
+        for p in parse_directory()
+    ]
+    # A second tenant, so cross-tenant isolation is testable. Not a real document.
+    records.append(
+        PolicyRecord(
+            business_id="biz_other",
+            topic="Unrelated seller policy",
+            text="Belongs to another tenant and must never surface for biz_demo.",
+            source_ref="other-tenant.md#fixture",
+            doc="other-tenant.md",
+        )
+    )
+    return records
+
+
+SEED_POLICIES: list[PolicyRecord] = _seed_policies()
+
 
 
 class MockStore(Store):
@@ -287,6 +249,8 @@ class MockStore(Store):
         self._policies = list(SEED_POLICIES)
         self._audit: list[AuditEntry] = []
         self._sessions: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        # Passage embeddings, built lazily on first search. Keyed by source_ref.
+        self._policy_vectors: dict[str, list[float]] = {}
         self._refunds: dict[tuple[str, str], RefundRecord] = {}
         self._escalations: dict[tuple[str, str], EscalationRecord] = {}
 
@@ -318,6 +282,53 @@ class MockStore(Store):
             (p for p in self._policies if p.business_id == business_id),
             key=lambda p: p.source_ref,
         )
+
+    async def search_policies(
+        self, business_id: str, embedding: list[float], limit: int = 5
+    ) -> list[tuple[PolicyRecord, float]]:
+        """Cosine similarity in Python — the same metric Postgres computes in SQL.
+
+        Passage embeddings are built once on first use and cached. The corpus is a
+        handful of rows, so an exact scan is the right shape here as well as in
+        the database.
+        """
+        from app.rag.embeddings import cosine, get_embedder
+
+        candidates = await self.list_policies(business_id)
+        if not candidates:
+            return []
+
+        missing = [p for p in candidates if p.source_ref not in self._policy_vectors]
+        if missing:
+            vectors = await get_embedder().embed(
+                [f"{p.topic}\n{p.text}" for p in missing]
+            )
+            for record, vector in zip(missing, vectors):
+                self._policy_vectors[record.source_ref] = vector
+
+        scored = [
+            (p, cosine(embedding, self._policy_vectors[p.source_ref]))
+            for p in candidates
+        ]
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+        return scored[:limit]
+
+    async def upsert_policy(
+        self, record: PolicyRecord, embedding: list[float] | None
+    ) -> None:
+        self._policies = [
+            p
+            for p in self._policies
+            if not (
+                p.business_id == record.business_id
+                and p.source_ref == record.source_ref
+            )
+        ]
+        self._policies.append(record)
+        if embedding is not None:
+            self._policy_vectors[record.source_ref] = embedding
+        else:
+            self._policy_vectors.pop(record.source_ref, None)
 
     async def create_refund(self, record: RefundRecord) -> bool:
         key = (record.business_id, record.order_id)

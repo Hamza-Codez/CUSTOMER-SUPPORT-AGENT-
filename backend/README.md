@@ -83,8 +83,13 @@ works, so you can point real Gemini at the in-memory store or vice versa.
 > to those. Namespacing keeps us additive — nothing outside `fte` is touched.
 
 ```bash
-# 1. Put a DATABASE_URL in .env, then create the schema and demo rows:
+# 1. Put a DATABASE_URL in .env, then create the schema, demo rows and
+#    the embedded knowledge base:
 uv run python scripts/init_db.py
+
+#    After editing a document in app/db/knowledge/, or changing
+#    EMBEDDING_PROVIDER / EMBEDDING_DIM, re-embed it:
+uv run python scripts/ingest_kb.py
 
 # 2. Confirm the Postgres path actually works:
 uv run pytest tests/test_postgres.py -v
@@ -125,7 +130,12 @@ app/
   handoffs/
     human_escalation.py  Decision Cards and the paused-run evidence
   rag/
-    keyword.py     IDF-weighted keyword retrieval; the Phase 4 vector-store swap point
+    parser.py      markdown documents -> citable passages (authored anchors)
+    embeddings.py  mock | gemini provider factory; always L2-normalised
+    keyword.py     IDF-weighted keyword retrieval
+    retriever.py   hybrid: keyword rejects, vectors add recall
+    ingest.py      parse -> embed -> upsert, keyed by source_ref
+  db/knowledge/    THE KNOWLEDGE BASE — the seller's actual documents
   db/
     base.py        the Store contract both implementations satisfy
     mock_store.py  in-memory; mirrors seed.sql
@@ -150,6 +160,10 @@ app/
   can never miss, so the agent never learns it doesn't know — it just cites
   whatever was least unrelated. `keyword.MIN_RELEVANCE` is what makes "I can't
   confirm that" reachable.
+- **The knowledge base is documents, not code.** `app/db/knowledge/*.md` is the
+  only source of policy text; both stores parse the same files. Citations use
+  authored anchors (`{#damaged-goods}`), so rewording a heading cannot break a
+  `source_ref` already sitting in an audit log.
 - **Money-moving tools arrive already gated.** `refund_processor` shipped with its
   identity check, amount check, auto-cap and approval pause attached. It has never
   existed in an ungated form, not even briefly.
@@ -183,7 +197,9 @@ Checked against the real thing on 2026-07-26, not assumed:
 | What | Result |
 |---|---|
 | `openai-agents` 0.18.3 on Python 3.14.3 | works |
-| **185 tests**, mock and PostgreSQL, no skips | pass |
+| **235 tests**, mock and PostgreSQL, no skips | pass |
+| **pgvector 0.8.0** on Supabase — ingest, cosine search, tenant scoping | pass |
+| **Real Gemini embeddings in real pgvector** — 6/6 on-topic, 0 off-domain leaks | pass |
 | Live `uvicorn` — `/health`, `/chat`, 401, multi-turn memory | pass |
 | **Gemini tool-calling and handoffs** via the OpenAI-compatible endpoint | **confirmed** |
 | Gemini honours identity refusal, unknown order, prompt injection | no data leaked |
@@ -225,6 +241,29 @@ free allowance is needed before then. Worth deciding early rather than at demo t
 the models endpoint, but calling it 404s with *"no longer available to new users"*.
 A pinned model name is therefore not automatically the safer choice on Gemini —
 re-verify whatever you pin.
+
+## How retrieval decides
+
+Two signals, and the asymmetry between them is the design:
+
+| Signal | Role | Why |
+|---|---|---|
+| Keyword (IDF + title boost) | **Admits and rejects** | Calibrated against this corpus; reliably returns nothing when the documents don't answer |
+| Vector (cosine over pgvector) | **Only admits** | Reaches phrasings sharing no words with the text, but cannot be trusted to reject |
+
+Measured against these documents with `gemini-embedding-001` at 1536 dims:
+on-topic questions scored **0.607–0.780**, off-domain ones **0.381–0.582**. The
+ranges separate by **0.025** — far too narrow to place a rejection threshold
+between them. So `RETRIEVAL_VECTOR_FLOOR` sits at **0.65**, well above the highest
+observed miss: vectors add only what they are confident about, and keyword does
+the rejecting. The same value leaves `mock` keyword-only, since the mock embedder
+tops out near 0.36.
+
+The hybrid earns its keep: "do I have to pay to send something back?" shares no
+useful terms with the returns policy and is found by the vector signal alone.
+
+⚠️ **Vectors from one model are meaningless to another.** Re-run
+`scripts/ingest_kb.py` after changing `EMBEDDING_PROVIDER` or `EMBEDDING_DIM`.
 
 ## Notes for the next phase
 

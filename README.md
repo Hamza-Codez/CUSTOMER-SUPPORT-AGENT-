@@ -20,7 +20,7 @@ the risky calls as a one-click decision for a person.
 
 | Directory | Status |
 |---|---|
-| [backend/](backend/) | **Phases 1–3 complete** — agent team, guardrails, gated refunds, human approval |
+| [backend/](backend/) | **Phases 1–4 complete** — agent team, guardrails, gated refunds, human approval, grounded RAG |
 | `frontend/` | Not started (Phase 6) |
 
 Start with [backend/README.md](backend/README.md). It runs with zero setup:
@@ -38,7 +38,7 @@ Next.js · FastAPI on `uv`/`uvicorn` · OpenAI Agents SDK · Gemini · PostgreSQ
 1. **Foundation** — backend skeleton, one agent + one tool end to end ✅
 2. **The team** — orchestrator + specialists, handoffs, sessions ✅
 3. **Safety** — guardrails, refund auto-cap, human approval + Decision Card ✅
-4. Knowledge — doc parsing, RAG, grounding guardrail
+4. **Knowledge** — doc parsing, RAG, grounding guardrail ✅
 5. Comms — SMTP themed mailer + feedback form
 6. Frontend — marketing pages, auth, dual dashboard
 7. Demo — the guided playground on seed data

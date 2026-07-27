@@ -68,29 +68,25 @@ insert into fte.products (business_id, product_id, name, price, stock, summary, 
      '{"note":"tenancy fixture"}'::jsonb)
 on conflict (business_id, product_id) do nothing;
 
-insert into fte.policies (business_id, topic, body, source_ref) values
-    ('biz_demo', 'Refund window',
-     'Refunds are available within 30 days of delivery, provided the item is unused and in its original packaging. Refunds are issued to the original payment method and take 5-10 business days to appear.',
-     'refund-policy.md#refund-window'),
-    ('biz_demo', 'Damaged or faulty goods',
-     'If an item arrives damaged or develops a fault within 30 days, we replace or refund it in full including original shipping. Photographs of the damage help us process the claim faster, but are not required.',
-     'refund-policy.md#damaged-goods'),
-    ('biz_demo', 'How to start a return',
-     'To return an item, contact support with your order number. We email a prepaid return label. Returns are free for faulty goods; for change-of-mind returns a 4.99 label fee is deducted from the refund.',
-     'returns-policy.md#starting-a-return'),
-    ('biz_demo', 'Order processing and dispatch',
-     'Orders placed before 2pm on a working day are dispatched the same day. Orders placed after 2pm, at weekends, or on public holidays are dispatched the next working day.',
-     'shipping-policy.md#dispatch'),
-    ('biz_demo', 'Delivery times and methods',
-     'Standard delivery takes 3-5 working days and is free over 50. Express delivery takes 1-2 working days and costs 7.99. Large items such as desks are delivered by a two-person carrier team on a booked slot.',
-     'shipping-policy.md#delivery-times'),
-    ('biz_demo', 'Warranty cover',
-     'Desks and chairs carry a 5 year warranty on frames and mechanisms. Accessories carry 1-2 years. Warranty covers manufacturing defects, not accidental damage or normal wear.',
-     'warranty-policy.md#cover'),
-    ('biz_other', 'Unrelated seller policy',
+-- biz_demo's policies are NOT seeded here. They are parsed and embedded from the
+-- markdown in app/db/knowledge/ by scripts/ingest_kb.py, so the documents are the
+-- only source of policy text. A copy in this file would drift the first time
+-- someone edited a policy and updated only one of the two.
+--
+-- Only the cross-tenant fixture lives here, because it is a test artefact rather
+-- than a document the seller wrote. It has no embedding, so vector search never
+-- returns it — which is the point: it must never surface for biz_demo.
+-- `do update`, not `do nothing`: a row seeded before the `doc` column existed
+-- would otherwise keep an empty value forever, and only show up as a parity
+-- failure against the in-memory store much later.
+insert into fte.policies (business_id, doc, topic, body, source_ref) values
+    ('biz_other', 'other-tenant.md', 'Unrelated seller policy',
      'Belongs to another tenant and must never surface for biz_demo.',
      'other-tenant.md#fixture')
-on conflict (business_id, source_ref) do nothing;
+on conflict (business_id, source_ref) do update
+    set doc = excluded.doc,
+        topic = excluded.topic,
+        body = excluded.body;
 
 -- Line items. Quantities are what the tool reports as `item_count`.
 insert into fte.order_items (business_id, order_ref, product_name, qty, unit_price)

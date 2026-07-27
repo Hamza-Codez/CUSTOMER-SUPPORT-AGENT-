@@ -64,6 +64,7 @@ class PolicyRecord:
     topic: str
     text: str
     source_ref: str
+    doc: str = ""
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,26 @@ class Store(ABC):
 
     @abstractmethod
     async def list_policies(self, business_id: str) -> list[PolicyRecord]: ...
+
+    @abstractmethod
+    async def search_policies(
+        self, business_id: str, embedding: list[float], limit: int = 5
+    ) -> list[tuple[PolicyRecord, float]]:
+        """Nearest passages by cosine similarity, best first, with their scores.
+
+        Returns similarity in [-1, 1], not distance, so "higher is better" holds
+        everywhere and a threshold reads the way it sounds. Both stores use cosine
+        over L2-normalised vectors, so the two rank identically.
+
+        Note this applies no relevance floor — that decision belongs to the
+        retriever, which has the keyword signal too.
+        """
+
+    @abstractmethod
+    async def upsert_policy(
+        self, record: PolicyRecord, embedding: list[float] | None
+    ) -> None:
+        """Insert or replace one passage, keyed by (business_id, source_ref)."""
 
     # --- money and escalations -------------------------------------------------
 

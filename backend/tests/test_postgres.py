@@ -32,11 +32,32 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+_prepared = False
+
+
 @pytest.fixture
 async def pg():
+    """A connected Postgres store.
+
+    Schema and ingestion run once per session, not per test. Both are idempotent,
+    so repeating them changes nothing — but each re-ingest embeds every passage
+    again, which turned a fast suite into a six-minute one. The connection itself
+    is still per-test, so pool lifecycle stays isolated.
+    """
+    global _prepared
+
     store = PostgresStore(DSN)
     await store.connect()
-    await store.apply_schema(seed=True)
+
+    if not _prepared:
+        from app.rag.ingest import ingest_knowledge_base
+
+        await store.apply_schema(seed=True)
+        # Policies come from the documents, not seed.sql, so the fixture loads
+        # them exactly the way the setup scripts do.
+        await ingest_knowledge_base(store, "biz_demo")
+        _prepared = True
+
     yield store
     await store.close()
 
@@ -84,6 +105,7 @@ async def test_products_match_the_mock_store(pg):
 
 
 async def test_policies_match_the_mock_store(pg):
+    """Both stores derive from the same markdown, so they must agree exactly."""
     from app.db.mock_store import MockStore
 
     mock = MockStore()
@@ -94,6 +116,98 @@ async def test_policies_match_the_mock_store(pg):
             p.source_ref for p in from_mock
         )
         assert set(from_pg) == set(from_mock), f"policies differ for {business_id}"
+
+
+class TestPgvector:
+    async def test_the_extension_and_column_exist(self, pg):
+        async with pg.pool.acquire() as conn:
+            version = await conn.fetchval(
+                "select extversion from pg_extension where extname = 'vector'"
+            )
+            dims = await conn.fetchval(
+                """
+                select atttypmod from pg_attribute
+                 where attrelid = 'fte.policies'::regclass and attname = 'embedding'
+                """
+            )
+        assert version
+        assert dims == 1536
+
+    async def test_every_ingested_passage_has_an_embedding(self, pg):
+        async with pg.pool.acquire() as conn:
+            missing = await conn.fetchval(
+                """
+                select count(*) from fte.policies
+                 where business_id = 'biz_demo' and embedding is null
+                """
+            )
+        assert missing == 0
+
+    async def test_vector_search_ranks_by_cosine_similarity(self, pg):
+        from app.rag.embeddings import embed_one
+
+        vector = await embed_one("how long does dispatch take?")
+        hits = await pg.search_policies("biz_demo", vector, limit=3)
+        assert hits
+        # Similarity, not distance: higher is better and the list is descending.
+        scores = [score for _, score in hits]
+        assert scores == sorted(scores, reverse=True)
+        assert all(-1.0 <= s <= 1.0 for s in scores)
+
+    async def test_vector_search_is_tenant_scoped(self, pg):
+        from app.rag.embeddings import embed_one
+
+        vector = await embed_one("unrelated seller policy")
+        hits = await pg.search_policies("biz_demo", vector, limit=10)
+        assert all(r.source_ref != "other-tenant.md#fixture" for r, _ in hits)
+
+    async def test_passages_without_an_embedding_are_excluded(self, pg):
+        """The cross-tenant fixture is seeded with no vector. It must be absent
+        rather than ranked as maximally distant, which would present an
+        un-ingested row as though it had been considered."""
+        from app.rag.embeddings import embed_one
+
+        vector = await embed_one("anything at all")
+        hits = await pg.search_policies("biz_other", vector, limit=10)
+        assert hits == []
+
+    async def test_ingest_updates_in_place_rather_than_duplicating(self, pg):
+        from app.rag.ingest import ingest_knowledge_base
+
+        before = len(await pg.list_policies("biz_demo"))
+        await ingest_knowledge_base(pg, "biz_demo")
+        assert len(await pg.list_policies("biz_demo")) == before
+
+
+class TestHybridRetrievalOnPostgres:
+    """The same questions the in-memory store answers, against real pgvector."""
+
+    @pytest.mark.parametrize(
+        "question,expected",
+        [
+            ("how long does dispatch take?", "shipping-policy.md#dispatch"),
+            ("what is your warranty cover?", "warranty-policy.md#cover"),
+            ("my item arrived broken", "refund-policy.md#damaged-goods"),
+            ("do you ship to Mars?", "shipping-policy.md#delivery-areas"),
+        ],
+    )
+    async def test_finds_the_right_passage(self, pg, question, expected):
+        from app.rag.retriever import retrieve_policies
+
+        hits = await retrieve_policies(pg, "biz_demo", question, limit=2)
+        assert hits, f"{question!r} returned nothing"
+        assert hits[0].record.source_ref == expected
+
+    @pytest.mark.parametrize(
+        "question",
+        ["do you accept cryptocurrency?", "what is the capital of France?"],
+    )
+    async def test_a_question_the_documents_do_not_answer_returns_nothing(
+        self, pg, question
+    ):
+        from app.rag.retriever import retrieve_policies
+
+        assert await retrieve_policies(pg, "biz_demo", question, limit=2) == []
 
 
 async def test_catalogue_and_policies_are_tenant_scoped(pg):

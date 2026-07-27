@@ -87,17 +87,17 @@ class TestPolicyRetriever:
     async def test_an_on_topic_question_returns_the_topical_passage(self, tenant):
         """Retrieval answers by *topic*, and that is the correct behaviour.
 
-        "Do you ship to Mars" returns the delivery policy — the right topic, even
-        though it says nothing about Mars. The model then reasons from a real
-        passage and can say Mars is not a destination we list. What must never
-        happen is the earlier defect: a shipping question coming back holding the
-        damaged-goods policy, which invites a confident answer on the wrong subject.
+        "Do you ship to Mars" returns the delivery-areas passage, which states we
+        do not ship outside our listed regions — a real answer, from a real
+        document. What must never happen is the earlier defect: a shipping
+        question coming back holding the damaged-goods policy, which invites a
+        confident answer on entirely the wrong subject.
         """
         result = await invoke(
             policy_retriever, tenant, question="do you ship to Mars?"
         )
-        if result.outcome == "found":
-            assert result.passages[0].topic == "Delivery times and methods"
+        assert result.outcome == "found"
+        assert result.passages[0].source_ref == "shipping-policy.md#delivery-areas"
 
     async def test_never_returns_another_tenants_policy(self, tenant):
         result = await invoke(policy_retriever, tenant, question="unrelated seller policy")

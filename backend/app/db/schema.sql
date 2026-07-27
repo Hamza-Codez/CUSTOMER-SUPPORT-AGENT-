@@ -16,6 +16,10 @@
 
 create schema if not exists fte;
 
+-- pgvector, for policy retrieval. Verified available on the target instance at
+-- version 0.8.0.
+create extension if not exists vector;
+
 create table if not exists fte.businesses (
     id          text primary key,
     name        text        not null,
@@ -73,15 +77,28 @@ create table if not exists fte.products (
     primary key (business_id, product_id)
 );
 
--- Parsed passages of the seller's written policy. `source_ref` is not nullable
--- on purpose: a passage that cannot be cited is one the agent must not use, and
--- the grounding guardrail in Phase 4 depends on that being true at the source.
+-- Parsed passages of the seller's written policy, produced by app/rag/parser.py
+-- from the markdown in app/db/knowledge/. `source_ref` is not nullable on
+-- purpose: a passage that cannot be cited is one the agent must not use, and the
+-- grounding guardrail depends on that being true at the source.
+--
+-- The embedding dimension is fixed by EMBEDDING_DIM (1536). Changing that config
+-- means altering this column and re-running scripts/ingest_kb.py — the vectors
+-- from one model are meaningless to another.
+--
+-- Deliberately no ivfflat/hnsw index. This corpus is a handful of rows, where a
+-- sequential scan is both exact and faster than an approximate index, and an
+-- ivfflat index built before the rows exist silently returns nothing — a trap
+-- worth simply not walking into. Add one when the corpus justifies it, after the
+-- data is loaded.
 create table if not exists fte.policies (
     id          bigserial primary key,
     business_id text        not null references fte.businesses (id) on delete cascade,
+    doc         text        not null default '',
     topic       text        not null,
     body        text        not null,
     source_ref  text        not null,
+    embedding   vector(1536),
     created_at  timestamptz not null default now(),
     unique (business_id, source_ref)
 );
@@ -150,3 +167,15 @@ create table if not exists fte.audit_logs (
 );
 
 create index if not exists audit_logs_biz_ts_idx on fte.audit_logs (business_id, ts desc);
+
+-- --------------------------------------------------------------------------
+-- Additive migrations
+--
+-- `create table if not exists` does nothing to a table that already exists, so
+-- columns added after a database was first created never appear. Anything added
+-- to a table above must also be stated here to reach an existing deployment.
+-- Both forms are idempotent, so this file stays safe to re-run.
+-- --------------------------------------------------------------------------
+
+alter table fte.policies add column if not exists doc text not null default '';
+alter table fte.policies add column if not exists embedding vector(1536);

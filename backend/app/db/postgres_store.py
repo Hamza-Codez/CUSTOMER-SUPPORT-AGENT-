@@ -58,6 +58,22 @@ def _date(value: Any) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _vector_literal(embedding: list[float]) -> str:
+    """pgvector's text input format. Sent as a string and cast in SQL, so no
+    codec registration is needed for a type asyncpg does not know natively."""
+    return "[" + ",".join(f"{x:.8f}" for x in embedding) + "]"
+
+
+def _policy(row: Any) -> PolicyRecord:
+    return PolicyRecord(
+        business_id=row["business_id"],
+        topic=row["topic"],
+        text=row["body"],
+        source_ref=row["source_ref"],
+        doc=row["doc"] or "",
+    )
+
+
 class PostgresStore(Store):
     kind = "postgres"
 
@@ -165,22 +181,62 @@ class PostgresStore(Store):
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                select business_id, topic, body, source_ref
+                select business_id, doc, topic, body, source_ref
                   from fte.policies
                  where business_id = $1
                  order by source_ref
                 """,
                 business_id,
             )
-        return [
-            PolicyRecord(
-                business_id=r["business_id"],
-                topic=r["topic"],
-                text=r["body"],
-                source_ref=r["source_ref"],
+        return [_policy(r) for r in rows]
+
+    async def search_policies(
+        self, business_id: str, embedding: list[float], limit: int = 5
+    ) -> list[tuple[PolicyRecord, float]]:
+        # `<=>` is cosine *distance*; 1 - distance gives similarity, so callers
+        # everywhere read "higher is better". Rows without an embedding are
+        # excluded rather than ranked as maximally distant, which would put
+        # un-ingested passages at the bottom of every result set as if they had
+        # been considered.
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                select business_id, doc, topic, body, source_ref,
+                       1 - (embedding <=> $2::vector) as similarity
+                  from fte.policies
+                 where business_id = $1
+                   and embedding is not null
+                 order by embedding <=> $2::vector
+                 limit $3
+                """,
+                business_id,
+                _vector_literal(embedding),
+                limit,
             )
-            for r in rows
-        ]
+        return [(_policy(r), float(r["similarity"])) for r in rows]
+
+    async def upsert_policy(
+        self, record: PolicyRecord, embedding: list[float] | None
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into fte.policies
+                    (business_id, doc, topic, body, source_ref, embedding)
+                values ($1, $2, $3, $4, $5, $6::vector)
+                on conflict (business_id, source_ref) do update
+                    set doc = excluded.doc,
+                        topic = excluded.topic,
+                        body = excluded.body,
+                        embedding = excluded.embedding
+                """,
+                record.business_id,
+                record.doc,
+                record.topic,
+                record.text,
+                record.source_ref,
+                _vector_literal(embedding) if embedding is not None else None,
+            )
 
     # --- money and escalations -------------------------------------------------
 

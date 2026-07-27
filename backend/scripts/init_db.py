@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import get_settings  # noqa: E402
 from app.db.postgres_store import PostgresStore  # noqa: E402
+from app.rag.ingest import ingest_knowledge_base  # noqa: E402
 
 
 async def main() -> int:
@@ -35,12 +36,21 @@ async def main() -> int:
         await store.apply_schema(seed=True)
         orders = [
             await store.get_order("biz_demo", oid)
-            for oid in ("ORD-1001", "ORD-1002", "ORD-1003", "ORD-1004")
+            for oid in ("ORD-1001", "ORD-1002", "ORD-1003", "ORD-1004", "ORD-1005")
         ]
         print("Schema applied and demo data seeded.")
         for order in orders:
             if order:
                 print(f"  {order.order_id}  {order.status:<11} {order.item_count} item(s)  {order.total}")
+
+        # Policies come from the documents, not from seed.sql.
+        report = await ingest_knowledge_base(store, "biz_demo")
+        print(
+            f"\nKnowledge base: {report.passages} passages embedded "
+            f"({report.provider}, dim {report.dim})"
+        )
+        for ref in report.source_refs:
+            print(f"  {ref}")
         return 0
     finally:
         await store.close()

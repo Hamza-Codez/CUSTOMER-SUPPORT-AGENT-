@@ -51,14 +51,20 @@ _STOPWORDS = frozenset(
 # this, the two never meet and the correct passage loses to an irrelevant one.
 _EXPANSIONS: dict[str, set[str]] = {
     "money": {"refund"},
+    "cash": {"refund"},
     "reimburse": {"refund"},
+    "reimbursement": {"refund"},
     "repay": {"refund"},
     "refund": {"refund", "return"},
     "cost": {"price"},
     "cheap": {"price"},
     "cheaper": {"price"},
+    # Unified in both directions. "-ing" is not a plural, so the singulariser
+    # leaves "shipping" alone, and a question about shipping would otherwise miss
+    # a passage that says "ship" while matching one that happens to contain the
+    # word "shipping" on an unrelated subject.
     "ship": {"shipping", "delivery"},
-    "shipping": {"delivery"},
+    "shipping": {"ship", "delivery"},
     "arrive": {"delivery"},
     "arrives": {"delivery"},
     "postage": {"shipping", "delivery"},
@@ -126,20 +132,18 @@ def _idf(corpus: list[set[str]]) -> Callable[[str], float]:
 TITLE_BOOST = 2.0
 
 
-def rank(
+def score_all(
     query: str,
     items: Iterable[T],
     text_of: Callable[[T], Sequence[str]],
-    limit: int = 3,
-    min_relevance: float = MIN_RELEVANCE,
-) -> list[T]:
-    """Best matches first; anything below `min_relevance` is dropped entirely.
+) -> list[tuple[T, float]]:
+    """Every item with its relevance, unfiltered and in input order.
+
+    Separate from `rank` so a caller combining this with another signal — see
+    `retriever.py` — can apply its own admission rule instead of inheriting one.
 
     `text_of` returns a record's searchable fields with its **title first** — the
     policy topic, the product name. That first field is weighted by `TITLE_BOOST`.
-
-    Returning an empty list is a valid and important answer — it is what lets the
-    agent say "I don't have that" instead of citing whatever was least unrelated.
     """
     candidates = list(items)
     if not candidates:
@@ -152,25 +156,43 @@ def rank(
 
     terms = expand(normalise(query))
     if not terms:
-        return []
+        return [(item, 0.0) for item in candidates]
 
     total_weight = sum(weight(t) for t in terms)
     if total_weight <= 0:
-        return []
+        return [(item, 0.0) for item in candidates]
 
-    scored: list[tuple[float, int, T]] = []
+    scored: list[tuple[T, float]] = []
     for index, item in enumerate(candidates):
         matched = terms & corpus[index]
         if not matched:
+            scored.append((item, 0.0))
             continue
         earned = sum(
             weight(t) * (TITLE_BOOST if t in titles[index] else 1.0) for t in matched
         )
         # Capped so a title-boosted match stays comparable to a perfect one.
-        relevance = min(earned / total_weight, 1.0)
-        if relevance >= min_relevance:
-            # `-index` keeps ordering deterministic when scores tie.
-            scored.append((relevance, -index, item))
+        scored.append((item, min(earned / total_weight, 1.0)))
+    return scored
 
+
+def rank(
+    query: str,
+    items: Iterable[T],
+    text_of: Callable[[T], Sequence[str]],
+    limit: int = 3,
+    min_relevance: float = MIN_RELEVANCE,
+) -> list[T]:
+    """Best matches first; anything below `min_relevance` is dropped entirely.
+
+    Returning an empty list is a valid and important answer — it is what lets the
+    agent say "I don't have that" instead of citing whatever was least unrelated.
+    """
+    scored = [
+        (score, -index, item)
+        for index, (item, score) in enumerate(score_all(query, items, text_of))
+        if score >= min_relevance
+    ]
+    # `-index` keeps ordering deterministic when scores tie.
     scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
     return [item for _, _, item in scored[:limit]]

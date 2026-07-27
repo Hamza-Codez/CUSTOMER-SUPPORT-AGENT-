@@ -15,7 +15,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.core import audit
 from app.core.auth import TenantContext
-from app.rag import keyword
+from app.rag.retriever import retrieve_policies
 from app.schemas import PolicyLookupResult, PolicyPassage
 
 MAX_PASSAGES = 2
@@ -38,14 +38,11 @@ async def policy_retriever(
     """
     tenant = ctx.context
     tenant.note_tool("policy_retriever")
-    policies = await tenant.store.list_policies(tenant.business_id)
 
-    matches = keyword.rank(
-        question,
-        policies,
-        text_of=lambda p: (p.topic, p.text),
-        limit=MAX_PASSAGES,
+    hits = await retrieve_policies(
+        tenant.store, tenant.business_id, question, limit=MAX_PASSAGES
     )
+    matches = [h.record for h in hits]
 
     await audit.record(
         tenant,
@@ -53,6 +50,9 @@ async def policy_retriever(
         target=question[:120],
         outcome="found" if matches else "no_match",
         sources=[p.source_ref for p in matches],
+        # Which signal admitted each passage, so a bad answer can be traced to
+        # keyword or vector retrieval rather than guessed at.
+        admitted_by=[h.admitted_by for h in hits],
     )
 
     if not matches:

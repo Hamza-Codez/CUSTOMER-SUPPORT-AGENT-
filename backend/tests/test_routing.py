@@ -134,10 +134,13 @@ class TestSpecialistsRunTheirTools:
 
 class TestGroundingBehaviour:
     def test_an_unanswerable_policy_question_is_refused_not_invented(self, client):
+        # Genuinely absent from the documents. (Shipping destinations used to sit
+        # here, until the shipping policy gained a "Where we deliver" section and
+        # the honest answer became the passage rather than a refusal.)
         body = send(
             client,
-            "what is your policy on interstellar shipping to Mars?",
-            session_id="mars",
+            "do you accept cryptocurrency as payment?",
+            session_id="crypto",
         )
         assert "no_policy_match" in kinds(body)
         assert "policy_cited" not in kinds(body)
