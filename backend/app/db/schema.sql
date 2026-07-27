@@ -225,6 +225,63 @@ create table if not exists fte.feedback (
 
 create index if not exists feedback_biz_idx on fte.feedback (business_id, created_at desc);
 
+-- Sellers asking to embed the FTE on their own site (SPEC §16.1). Deliberately
+-- not a dead-end mailto: the request is a record an operator can work through.
+create table if not exists fte.integration_requests (
+    id            bigserial primary key,
+    request_id    text        not null unique,
+    business_id   text        not null references fte.businesses (id) on delete cascade,
+    contact_name  text        not null,
+    contact_email text        not null,
+    website       text        not null default '',
+    platform      text        not null default '',
+    monthly_conversations text not null default '',
+    notes         text        not null default '',
+    status        text        not null default 'new',
+    created_at    timestamptz not null default now()
+);
+
+create index if not exists integration_requests_biz_idx
+    on fte.integration_requests (business_id, created_at desc);
+
+-- Token accounting, per conversation turn. Without this "cost per conversation"
+-- (SPEC §16.5, §19) is a number nobody can produce, and a made-up one is worse
+-- than none. `provider` is stored because usage from the mock provider is always
+-- zero and must never be presented as a real cost.
+create table if not exists fte.conversation_usage (
+    id            bigserial primary key,
+    business_id   text        not null references fte.businesses (id) on delete cascade,
+    session_id    text        not null,
+    provider      text        not null,
+    model         text        not null default '',
+    requests      int         not null default 0,
+    input_tokens  int         not null default 0,
+    output_tokens int         not null default 0,
+    ts            timestamptz not null default now()
+);
+
+create index if not exists conversation_usage_biz_idx
+    on fte.conversation_usage (business_id, ts desc);
+
+-- Seller accounts. Sign-up is for sellers, not shoppers: an end customer is
+-- identified by order id + email because the widget lives on the seller's own
+-- site, so they have no account here to have.
+--
+-- `email` is unique platform-wide rather than per business, because login
+-- happens before we know which business someone belongs to.
+create table if not exists fte.users (
+    id            bigserial primary key,
+    user_id       text        not null unique,
+    business_id   text        not null references fte.businesses (id) on delete cascade,
+    email         text        not null unique,
+    name          text        not null,
+    password_hash text        not null,
+    role          text        not null default 'operator',
+    created_at    timestamptz not null default now()
+);
+
+create index if not exists users_business_idx on fte.users (business_id);
+
 -- --------------------------------------------------------------------------
 -- Additive migrations
 --

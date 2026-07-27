@@ -146,6 +146,61 @@ class FeedbackRecord:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass(frozen=True)
+class UserRecord:
+    """A seller's account.
+
+    `password_hash` lives on this record because the data layer is the only thing
+    that should ever see it. Nothing that leaves the backend carries it.
+    """
+
+    user_id: str
+    business_id: str
+    email: str
+    name: str
+    password_hash: str
+    role: str = "operator"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class IntegrationRequest:
+    request_id: str
+    business_id: str
+    contact_name: str
+    contact_email: str
+    website: str = ""
+    platform: str = ""
+    monthly_conversations: str = ""
+    notes: str = ""
+    status: str = "new"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class UsageRecord:
+    business_id: str
+    session_id: str
+    provider: str
+    model: str = ""
+    requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class UsageSummary:
+    """Aggregate token usage. `providers` is carried because usage recorded on
+    the mock provider is always zero — a cost derived from it would be fiction."""
+
+    conversations: int = 0
+    model_requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    providers: set[str] = field(default_factory=set)
+
+
 @dataclass
 class AuditEntry:
     business_id: str
@@ -313,6 +368,62 @@ class Store(ABC):
     async def list_feedback(
         self, business_id: str, limit: int = 50
     ) -> list[FeedbackRecord]: ...
+
+    # --- accounts ---------------------------------------------------------------
+
+    @abstractmethod
+    async def create_business(self, business_id: str, name: str) -> None:
+        """Create the tenant a signing-up seller will own."""
+
+    @abstractmethod
+    async def create_user(self, record: UserRecord) -> bool:
+        """False if that email is already registered — a taken email is an
+        answer the signup form can show, not an exception."""
+
+    @abstractmethod
+    async def get_business_name(self, business_id: str) -> str | None: ...
+
+    @abstractmethod
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        """Deliberately NOT tenant-scoped: login happens before we know which
+        business someone belongs to. It is the one lookup that cannot be."""
+
+    # --- commercial -------------------------------------------------------------
+
+    @abstractmethod
+    async def create_integration_request(self, record: IntegrationRequest) -> None: ...
+
+    @abstractmethod
+    async def list_integration_requests(
+        self, business_id: str, limit: int = 50
+    ) -> list[IntegrationRequest]:
+        """Newest first."""
+
+    @abstractmethod
+    async def record_usage(self, record: UsageRecord) -> None:
+        """Token accounting for one turn. Never blocks a reply — a conversation
+        that succeeded must not fail because a metric could not be written."""
+
+    @abstractmethod
+    async def usage_summary(self, business_id: str) -> UsageSummary: ...
+
+    @abstractmethod
+    async def conversation_count(self, business_id: str) -> int:
+        """Conversations this tenant has had, counted from the transcript.
+
+        Deliberately not counted from token usage: accounting was added later, so
+        that denominator would exclude every conversation held before it and make
+        deflection read as though escalations happened outside any conversation.
+        A session with messages is a conversation, whenever it happened.
+        """
+
+    @abstractmethod
+    async def escalation_counts(self, business_id: str) -> dict[str, int]:
+        """Counts by status, plus `sessions` — conversations that produced one.
+
+        `sessions` is what deflection is measured against: a conversation with
+        three escalations is still one conversation that needed a human.
+        """
 
     # --- audit ----------------------------------------------------------------
 

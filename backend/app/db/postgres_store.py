@@ -19,11 +19,15 @@ from app.db.base import (
     EmailRecord,
     EscalationRecord,
     FeedbackRecord,
+    IntegrationRequest,
     OrderRecord,
     PolicyRecord,
     ProductRecord,
     RefundRecord,
     Store,
+    UsageRecord,
+    UsageSummary,
+    UserRecord,
     VerificationRecord,
 )
 
@@ -622,6 +626,196 @@ class PostgresStore(Store):
             )
             for r in rows
         ]
+
+    # --- accounts ---------------------------------------------------------------
+
+    async def create_business(self, business_id: str, name: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into fte.businesses (id, name) values ($1, $2)
+                on conflict (id) do nothing
+                """,
+                business_id,
+                name,
+            )
+
+    async def create_user(self, record: UserRecord) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                insert into fte.users
+                    (user_id, business_id, email, name, password_hash, role, created_at)
+                values ($1, $2, lower($3), $4, $5, $6, $7)
+                on conflict (email) do nothing
+                returning user_id
+                """,
+                record.user_id,
+                record.business_id,
+                record.email,
+                record.name,
+                record.password_hash,
+                record.role,
+                record.created_at,
+            )
+        return row is not None
+
+    async def get_business_name(self, business_id: str) -> str | None:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "select name from fte.businesses where id = $1", business_id
+            )
+
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                select user_id, business_id, email, name, password_hash, role, created_at
+                  from fte.users where email = lower($1)
+                """,
+                email,
+            )
+        if row is None:
+            return None
+        return UserRecord(
+            user_id=row["user_id"],
+            business_id=row["business_id"],
+            email=row["email"],
+            name=row["name"],
+            password_hash=row["password_hash"],
+            role=row["role"],
+            created_at=row["created_at"],
+        )
+
+    # --- commercial -------------------------------------------------------------
+
+    _INTEGRATION_COLS = """
+        request_id, business_id, contact_name, contact_email, website, platform,
+        monthly_conversations, notes, status, created_at
+    """
+
+    async def create_integration_request(self, record: IntegrationRequest) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"""
+                insert into fte.integration_requests ({self._INTEGRATION_COLS})
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                """,
+                record.request_id,
+                record.business_id,
+                record.contact_name,
+                record.contact_email,
+                record.website,
+                record.platform,
+                record.monthly_conversations,
+                record.notes,
+                record.status,
+                record.created_at,
+            )
+
+    async def list_integration_requests(
+        self, business_id: str, limit: int = 50
+    ) -> list[IntegrationRequest]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                select {self._INTEGRATION_COLS} from fte.integration_requests
+                 where business_id = $1
+                 order by created_at desc, id desc
+                 limit $2
+                """,
+                business_id,
+                limit,
+            )
+        return [
+            IntegrationRequest(
+                request_id=r["request_id"],
+                business_id=r["business_id"],
+                contact_name=r["contact_name"],
+                contact_email=r["contact_email"],
+                website=r["website"],
+                platform=r["platform"],
+                monthly_conversations=r["monthly_conversations"],
+                notes=r["notes"],
+                status=r["status"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    async def record_usage(self, record: UsageRecord) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into fte.conversation_usage
+                    (business_id, session_id, provider, model, requests,
+                     input_tokens, output_tokens, ts)
+                values ($1, $2, $3, $4, $5, $6, $7, $8)
+                """,
+                record.business_id,
+                record.session_id,
+                record.provider,
+                record.model,
+                record.requests,
+                record.input_tokens,
+                record.output_tokens,
+                record.ts,
+            )
+
+    async def usage_summary(self, business_id: str) -> UsageSummary:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                select count(distinct session_id)::int    as conversations,
+                       coalesce(sum(requests), 0)::int    as model_requests,
+                       coalesce(sum(input_tokens), 0)::int  as input_tokens,
+                       coalesce(sum(output_tokens), 0)::int as output_tokens,
+                       coalesce(array_agg(distinct provider), '{}') as providers
+                  from fte.conversation_usage
+                 where business_id = $1
+                """,
+                business_id,
+            )
+        return UsageSummary(
+            conversations=row["conversations"],
+            model_requests=row["model_requests"],
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
+            providers=set(row["providers"] or []),
+        )
+
+    async def conversation_count(self, business_id: str) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                select count(distinct session_id)::int
+                  from fte.messages where business_id = $1
+                """,
+                business_id,
+            ) or 0
+
+    async def escalation_counts(self, business_id: str) -> dict[str, int]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                select status, count(*)::int as n
+                  from fte.escalations where business_id = $1
+                 group by status
+                """,
+                business_id,
+            )
+            sessions = await conn.fetchval(
+                """
+                select count(distinct session_id)::int
+                  from fte.escalations where business_id = $1
+                """,
+                business_id,
+            )
+        counts = {"pending": 0, "approved": 0, "declined": 0}
+        for row in rows:
+            counts[row["status"]] = row["n"]
+        counts["sessions"] = sessions or 0
+        return counts
 
     # --- audit ----------------------------------------------------------------
 

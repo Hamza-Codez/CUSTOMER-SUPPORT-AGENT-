@@ -8,6 +8,7 @@ guardrails and tools, data belongs to `app/tools/`.
 from __future__ import annotations
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -27,10 +28,25 @@ from app.comms.templates import render_thanks_page
 from app.core import audit
 from app.core.auth import TenantContext, TenantDep
 from app.core.config import get_settings
+from app.core.security import (
+    TOKEN_TTL,
+    dummy_hash,
+    hash_password,
+    issue_token,
+    verify_password,
+)
 from app.db import get_store, set_store
-from app.db.base import FeedbackRecord
+from app.db.base import (
+    FeedbackRecord,
+    PolicyRecord,
+    IntegrationRequest,
+    UsageRecord,
+    UserRecord,
+)
 from app.db.session_store import StoreSession
 from app.guardrails.input_guards import REDIRECT_MESSAGE
+from app.rag.embeddings import get_embedder
+from app.rag.parser import slugify
 from app.handoffs.human_escalation import (
     build_decision_card,
     new_escalation,
@@ -38,8 +54,11 @@ from app.handoffs.human_escalation import (
     to_public_card,
 )
 from app.schemas import (
+    AccountView,
     ActivityEntry,
     AgentAction,
+    Analytics,
+    AuthResponse,
     ChatRequest,
     ChatResponse,
     DecisionRequest,
@@ -50,10 +69,18 @@ from app.schemas import (
     FeedbackResponse,
     FeedbackSummary,
     HealthResponse,
+    IntegrationAccepted,
+    IntegrationRequestBody,
+    IntegrationRequestList,
+    IntegrationRequestView,
+    LoginRequest,
+    OnboardingContext,
+    OnboardingResult,
     OrderSummary,
     OverviewResponse,
     PolicySummary,
     ProductSummary,
+    SignupRequest,
 )
 
 log = logging.getLogger("fte")
@@ -428,6 +455,7 @@ async def chat(req: ChatRequest, tenant: TenantDep) -> ChatResponse:
             detail=f"Agent run failed: {type(exc).__name__}: {exc}",
         ) from exc
 
+    await _record_usage(tenant, result)
     actions = collect_actions(result)
 
     # A gated tool paused the run. Nothing has been executed.
@@ -459,6 +487,35 @@ async def chat(req: ChatRequest, tenant: TenantDep) -> ChatResponse:
         session_id=req.session_id,
         actions=actions,
     )
+
+
+async def _record_usage(tenant: TenantContext, result: Any) -> None:
+    """Token accounting for this turn, for cost per conversation (SPEC §16.5).
+
+    Wrapped because a metric is never worth a failed reply: the customer already
+    has their answer, and losing one usage row is a rounding error against
+    returning them a 500.
+    """
+    try:
+        settings = get_settings()
+        usage = result.context_wrapper.usage
+        await tenant.store.record_usage(
+            UsageRecord(
+                business_id=tenant.business_id,
+                session_id=tenant.session_id,
+                provider=settings.model_provider,
+                model=(
+                    settings.gemini_model
+                    if settings.model_provider == "gemini"
+                    else "mock"
+                ),
+                requests=getattr(usage, "requests", 0) or 0,
+                input_tokens=getattr(usage, "input_tokens", 0) or 0,
+                output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            )
+        )
+    except Exception:
+        log.exception("could not record usage for session %s", tenant.session_id)
 
 
 def _guardrail_info(trip: Exception) -> dict[str, Any]:
@@ -512,6 +569,296 @@ async def list_escalations(
         tenant.business_id, status=status_filter
     )
     return EscalationList(escalations=[to_public_card(r) for r in records])
+
+
+# --- accounts -----------------------------------------------------------------
+
+
+async def _account_view(store: Any, user: UserRecord) -> AccountView:
+    return AccountView(
+        user_id=user.user_id,
+        business_id=user.business_id,
+        business_name=await store.get_business_name(user.business_id) or "Your store",
+        email=user.email,
+        name=user.name,
+        role=user.role,
+    )
+
+
+def _auth_response(user: UserRecord, account: AccountView) -> AuthResponse:
+    return AuthResponse(
+        token=issue_token(
+            user_id=user.user_id,
+            business_id=user.business_id,
+            role=user.role,
+            email=user.email,
+        ),
+        expires_in_days=TOKEN_TTL.days,
+        account=account,
+    )
+
+
+@app.post("/auth/signup", response_model=AuthResponse, status_code=201)
+async def signup(req: SignupRequest) -> AuthResponse:
+    """Register a seller and create the store they will own.
+
+    Sign-up creates a *business*, not just a login. Everything here is scoped by
+    `business_id`, so an account without one could not read or write a single row.
+    """
+    store = get_store()
+    business_id = f"biz_{uuid.uuid4().hex[:12]}"
+    user = UserRecord(
+        user_id=f"usr_{uuid.uuid4().hex[:12]}",
+        business_id=business_id,
+        email=req.email.lower(),
+        name=req.name.strip(),
+        password_hash=hash_password(req.password),
+        role="operator",
+    )
+
+    # Business first: a user row pointing at a business that does not exist would
+    # violate the foreign key, and the tenant is the thing actually being created.
+    await store.create_business(business_id, req.business_name.strip())
+    if not await store.create_user(user):
+        raise HTTPException(
+            status_code=409,
+            detail="That email is already registered. Try signing in instead.",
+        )
+
+    return _auth_response(user, await _account_view(store, user))
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+async def login(req: LoginRequest) -> AuthResponse:
+    store = get_store()
+    user = await store.get_user_by_email(req.email)
+
+    # Verify even when there is no such account, against a throwaway hash.
+    # Otherwise an unknown email returns in microseconds while a wrong password
+    # takes ~240ms, which is a free way to enumerate who has an account.
+    ok = verify_password(req.password, user.password_hash if user else dummy_hash())
+    if not user or not ok:
+        # One message for both cases, for the same reason.
+        raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+
+    return _auth_response(user, await _account_view(store, user))
+
+
+@app.get("/auth/me", response_model=AccountView)
+async def me(tenant: TenantDep) -> AccountView:
+    """Who the current token belongs to.
+
+    Lets the frontend tell a still-valid session from an expired one without
+    inferring it from a 401 on some unrelated call.
+    """
+    store = get_store()
+    if tenant.user_email:
+        user = await store.get_user_by_email(tenant.user_email)
+        if user:
+            return await _account_view(store, user)
+
+    # A demo token has no account behind it, and saying so is more useful than
+    # inventing a name for it.
+    return AccountView(
+        user_id=tenant.actor,
+        business_id=tenant.business_id,
+        business_name=await store.get_business_name(tenant.business_id)
+        or "Demo store",
+        email="",
+        name="Demo session",
+        role=tenant.role,
+    )
+
+
+@app.post("/onboarding/context", response_model=OnboardingResult, status_code=201)
+async def onboarding_context(
+    req: OnboardingContext,
+    tenant: TenantContext = Depends(require_operator),
+) -> OnboardingResult:
+    """Turn a seller's own policy text into the passages their agent may cite.
+
+    This is what makes a new account useful: until it runs, the agent has nothing
+    grounded to say and correctly refuses every policy question. Passages are
+    embedded on the way in with whatever provider is configured, so retrieval
+    works immediately.
+    """
+    embedder = get_embedder()
+    # Topic and body embedded together: a question often matches the heading
+    # more directly than any sentence beneath it.
+    vectors = await embedder.embed(
+        [draft.topic + "\n" + draft.body for draft in req.policies]
+    )
+
+    refs: list[str] = []
+    for draft, vector in zip(req.policies, vectors):
+        # Authored refs, as with the seeded documents, so a citation stays stable
+        # if the seller later reworks the wording.
+        ref = f"onboarding.md#{slugify(draft.topic)}"
+        refs.append(ref)
+        await tenant.store.upsert_policy(
+            PolicyRecord(
+                business_id=tenant.business_id,
+                topic=draft.topic.strip(),
+                text=draft.body.strip(),
+                source_ref=ref,
+                doc="onboarding.md",
+            ),
+            vector,
+        )
+
+    await audit.record(
+        tenant,
+        action="onboarding_context",
+        target=tenant.business_id,
+        outcome="stored",
+        passages=len(refs),
+    )
+    return OnboardingResult(
+        passages=len(refs),
+        source_refs=refs,
+        message="Your agent can now answer from these, and only these.",
+    )
+
+
+@app.post("/integrations/request", response_model=IntegrationAccepted, status_code=201)
+async def request_integration(
+    req: IntegrationRequestBody, tenant: TenantDep
+) -> IntegrationAccepted:
+    """A seller asking to embed the FTE on their own site (SPEC §16.1).
+
+    Deliberately a record rather than a mailto: the point of the guided path is
+    that the request lands somewhere an operator can work through, instead of
+    the flow ending in a dead end.
+    """
+    record = IntegrationRequest(
+        request_id=f"int_{uuid.uuid4().hex[:10]}",
+        business_id=tenant.business_id,
+        contact_name=req.contact_name.strip(),
+        contact_email=req.contact_email.strip(),
+        website=req.website.strip(),
+        platform=req.platform.strip(),
+        monthly_conversations=req.monthly_conversations.strip(),
+        notes=req.notes.strip(),
+    )
+    await tenant.store.create_integration_request(record)
+    await audit.record(
+        tenant,
+        action="integration_request",
+        target=record.request_id,
+        outcome="received",
+        platform=record.platform,
+    )
+    return IntegrationAccepted(
+        request_id=record.request_id,
+        status="received",
+        message=(
+            "Thanks — your request is logged and someone will be in touch about "
+            "embedding the FTE on your site."
+        ),
+    )
+
+
+@app.get("/dashboard/integrations", response_model=IntegrationRequestList)
+async def list_integrations(
+    tenant: TenantContext = Depends(require_operator),
+) -> IntegrationRequestList:
+    records = await tenant.store.list_integration_requests(tenant.business_id)
+    return IntegrationRequestList(
+        requests=[
+            IntegrationRequestView(
+                request_id=r.request_id,
+                contact_name=r.contact_name,
+                contact_email=r.contact_email,
+                website=r.website,
+                platform=r.platform,
+                monthly_conversations=r.monthly_conversations,
+                notes=r.notes,
+                status=r.status,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in records
+        ]
+    )
+
+
+@app.get("/dashboard/analytics", response_model=Analytics)
+async def analytics(
+    tenant: TenantContext = Depends(require_operator),
+) -> Analytics:
+    """The success signals from SPEC §16.5, computed from real records."""
+    settings = get_settings()
+    usage = await tenant.store.usage_summary(tenant.business_id)
+    escalations = await tenant.store.escalation_counts(tenant.business_id)
+    feedback = await tenant.store.list_feedback(tenant.business_id, limit=1000)
+    audit_entries = await tenant.store.recent_audit(tenant.business_id, limit=1000)
+
+    # Counted from the transcript, not from token usage: accounting arrived later,
+    # so a usage-based denominator would report escalations as having happened
+    # outside any conversation at all.
+    conversations = await tenant.store.conversation_count(tenant.business_id)
+    escalated = min(escalations.get("sessions", 0), conversations)
+    settled = escalations.get("approved", 0) + escalations.get("declined", 0)
+    total_tokens = usage.input_tokens + usage.output_tokens
+
+    # Cost is only meaningful with both a price and real tokens behind it. The
+    # mock provider reports zero usage, so a figure derived from it would be a
+    # statement about nothing.
+    priced = settings.cost_per_mtok_input > 0 or settings.cost_per_mtok_output > 0
+    cost_note: str | None = None
+    cost_per_conversation: float | None = None
+
+    if not priced:
+        cost_note = (
+            "Set COST_PER_MTOK_INPUT and COST_PER_MTOK_OUTPUT to price conversations."
+        )
+    elif total_tokens == 0:
+        cost_note = (
+            "No token usage recorded yet — the mock provider does not consume any."
+            if "mock" in usage.providers or not usage.providers
+            else "No token usage recorded yet."
+        )
+    elif usage.conversations:
+        # Divided by the conversations that actually consumed tokens, so the
+        # figure is not diluted by history predating the accounting.
+        total_cost = (
+            usage.input_tokens * settings.cost_per_mtok_input
+            + usage.output_tokens * settings.cost_per_mtok_output
+        ) / 1_000_000
+        cost_per_conversation = round(total_cost / usage.conversations, 6)
+
+    return Analytics(
+        conversations=conversations,
+        escalated_conversations=escalated,
+        deflection_rate=(
+            round(1 - (escalated / conversations), 4) if conversations else None
+        ),
+        escalations={
+            k: v for k, v in escalations.items() if k != "sessions"
+        },
+        handoff_approval_rate=(
+            round(escalations.get("approved", 0) / settled, 4) if settled else None
+        ),
+        csat_responses=len(feedback),
+        csat_average=(
+            round(sum(f.rating for f in feedback) / len(feedback), 2)
+            if feedback
+            else None
+        ),
+        refunds_executed=sum(
+            1
+            for e in audit_entries
+            if e.action == "refund_processor" and e.outcome == "executed"
+        ),
+        model_requests=usage.model_requests,
+        total_tokens=total_tokens,
+        tokens_per_conversation=(
+            round(total_tokens / usage.conversations, 1)
+            if usage.conversations
+            else None
+        ),
+        cost_per_conversation=cost_per_conversation,
+        cost_note=cost_note,
+    )
 
 
 @app.get("/dashboard/overview", response_model=OverviewResponse)

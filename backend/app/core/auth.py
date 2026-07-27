@@ -18,6 +18,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, status
 
 from app.core.config import get_settings
+from app.core.security import read_token
 from app.db import Store, get_store
 
 
@@ -42,6 +43,9 @@ class TenantContext:
     # to record which conversation it came from so the outcome can be returned to
     # the right customer.
     session_id: str = "default"
+
+    # Set when a real session token identified an account; None for demo tokens.
+    user_email: str | None = None
 
     # --- run-scoped evidence ---------------------------------------------------
     # Names of tools that actually executed this run. Grounding is judged on this.
@@ -90,6 +94,12 @@ def _parse_dev_tokens(raw: str) -> dict[str, tuple[str, str]]:
 async def require_tenant(
     authorization: Annotated[str | None, Header()] = None,
 ) -> TenantContext:
+    """Resolve the caller: a real session token first, a demo token second.
+
+    Both paths end in the same `TenantContext`, so nothing downstream knows or
+    cares which was used. The demo tokens stay because the seeded playground has
+    to work for someone who has not signed up — which is the whole point of it.
+    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -97,11 +107,24 @@ async def require_tenant(
         )
 
     token = authorization.split(" ", 1)[1].strip()
+
+    claims = read_token(token)
+    if claims:
+        return TenantContext(
+            business_id=claims["biz"],
+            role=claims.get("role", "operator"),
+            # The account, not the token — an audit trail naming a credential
+            # tells you nothing about who acted.
+            actor=f"{claims.get('role', 'operator')}:{claims.get('email', claims['sub'])}",
+            user_email=claims.get("email"),
+            store=get_store(),
+        )
+
     tokens = _parse_dev_tokens(get_settings().dev_tokens)
     if token not in tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unknown token.",
+            detail="Session expired or invalid. Please sign in again.",
         )
 
     business_id, role = tokens[token]

@@ -16,11 +16,15 @@ from app.db.base import (
     EmailRecord,
     EscalationRecord,
     FeedbackRecord,
+    IntegrationRequest,
     OrderRecord,
     PolicyRecord,
     ProductRecord,
     RefundRecord,
     Store,
+    UsageRecord,
+    UsageSummary,
+    UserRecord,
     VerificationRecord,
 )
 from app.rag.parser import parse_directory
@@ -259,6 +263,11 @@ class MockStore(Store):
         self._emails: dict[tuple[str, str], EmailRecord] = {}
         self._feedback: dict[str, FeedbackRecord] = {}
         self._verifications: dict[tuple[str, str, str], VerificationRecord] = {}
+        self._integrations: list[IntegrationRequest] = []
+        self._usage: list[UsageRecord] = []
+        self._businesses: dict[str, str] = {"biz_demo": "Aeron Home Goods",
+                                            "biz_other": "Unrelated Seller"}
+        self._users: dict[str, UserRecord] = {}
 
     async def connect(self) -> None:
         return None
@@ -440,6 +449,57 @@ class MockStore(Store):
         rows = [f for f in self._feedback.values() if f.business_id == business_id]
         rows.sort(key=lambda f: f.created_at, reverse=True)
         return rows[:limit]
+
+    async def create_business(self, business_id: str, name: str) -> None:
+        self._businesses[business_id] = name
+
+    async def create_user(self, record: UserRecord) -> bool:
+        if record.email.casefold() in self._users:
+            return False
+        self._users[record.email.casefold()] = record
+        return True
+
+    async def get_business_name(self, business_id: str) -> str | None:
+        return self._businesses.get(business_id)
+
+    async def get_user_by_email(self, email: str) -> UserRecord | None:
+        return self._users.get(email.casefold())
+
+    async def create_integration_request(self, record: IntegrationRequest) -> None:
+        self._integrations.append(record)
+
+    async def list_integration_requests(
+        self, business_id: str, limit: int = 50
+    ) -> list[IntegrationRequest]:
+        rows = [r for r in self._integrations if r.business_id == business_id]
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+        return rows[:limit]
+
+    async def record_usage(self, record: UsageRecord) -> None:
+        self._usage.append(record)
+
+    async def usage_summary(self, business_id: str) -> UsageSummary:
+        rows = [u for u in self._usage if u.business_id == business_id]
+        return UsageSummary(
+            conversations=len({u.session_id for u in rows}),
+            model_requests=sum(u.requests for u in rows),
+            input_tokens=sum(u.input_tokens for u in rows),
+            output_tokens=sum(u.output_tokens for u in rows),
+            providers={u.provider for u in rows},
+        )
+
+    async def conversation_count(self, business_id: str) -> int:
+        return len({sess for (biz, sess) in self._sessions if biz == business_id})
+
+    async def escalation_counts(self, business_id: str) -> dict[str, int]:
+        rows = [
+            e for (biz, _), e in self._escalations.items() if biz == business_id
+        ]
+        counts = {"pending": 0, "approved": 0, "declined": 0}
+        for row in rows:
+            counts[row.status] = counts.get(row.status, 0) + 1
+        counts["sessions"] = len({r.session_id for r in rows})
+        return counts
 
     async def write_audit(self, entry: AuditEntry) -> None:
         self._audit.append(entry)

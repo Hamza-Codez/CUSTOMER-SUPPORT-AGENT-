@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 # --- HTTP contract: POST /chat -----------------------------------------------
 
@@ -188,6 +188,131 @@ class FeedbackSummary(BaseModel):
     responses: int
     average_rating: float | None
     ratings: dict[str, int]
+
+
+# --- HTTP contract: accounts --------------------------------------------------
+#
+# Sign-up is for sellers. An end customer is identified by order id + email
+# because the widget lives on the seller's own site, so they have no account
+# here to have.
+
+
+class SignupRequest(BaseModel):
+    business_name: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    # Length is the control that actually matters; composition rules push people
+    # toward "Password1!" and no further.
+    password: str = Field(min_length=10, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=200)
+
+
+class AccountView(BaseModel):
+    user_id: str
+    business_id: str
+    business_name: str
+    email: str
+    name: str
+    role: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    expires_in_days: int
+    account: AccountView
+
+
+# --- HTTP contract: onboarding -------------------------------------------------
+
+
+class PolicyDraft(BaseModel):
+    topic: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=8000)
+
+
+class OnboardingContext(BaseModel):
+    """The seller's context feed (SPEC §12).
+
+    Policies arrive as text the seller wrote, and become the passages their agent
+    is allowed to cite. Nothing else is accepted here: what the agent may say is
+    exactly what the seller supplied.
+    """
+
+    policies: list[PolicyDraft] = Field(min_length=1, max_length=40)
+
+
+class OnboardingResult(BaseModel):
+    passages: int
+    source_refs: list[str]
+    message: str
+
+
+# --- HTTP contract: integrations ----------------------------------------------
+
+
+class IntegrationRequestBody(BaseModel):
+    contact_name: str = Field(min_length=1, max_length=120)
+    contact_email: str = Field(min_length=3, max_length=254)
+    website: str = Field(default="", max_length=300)
+    platform: str = Field(default="", max_length=80)
+    monthly_conversations: str = Field(default="", max_length=40)
+    notes: str = Field(default="", max_length=2000)
+
+
+class IntegrationRequestView(BaseModel):
+    request_id: str
+    contact_name: str
+    contact_email: str
+    website: str
+    platform: str
+    monthly_conversations: str
+    notes: str
+    status: str
+    created_at: str
+
+
+class IntegrationRequestList(BaseModel):
+    requests: list[IntegrationRequestView]
+
+
+class IntegrationAccepted(BaseModel):
+    request_id: str
+    status: str
+    message: str
+
+
+# --- HTTP contract: analytics -------------------------------------------------
+
+
+class Analytics(BaseModel):
+    """The success signals from SPEC §16.5, computed from real records.
+
+    Every rate is `None` rather than 0 when there is nothing to divide by. A
+    deflection rate of "100%" from zero conversations is not a good number, it is
+    an absent one, and a dashboard that cannot tell the difference will be
+    believed at the wrong moment.
+    """
+
+    conversations: int
+    escalated_conversations: int
+    # Share of conversations resolved without needing a person.
+    deflection_rate: float | None
+    escalations: dict[str, int]
+    # Share of settled Decision Cards the operator approved as prepared.
+    handoff_approval_rate: float | None
+    csat_responses: int
+    csat_average: float | None
+    refunds_executed: int
+    model_requests: int
+    total_tokens: int
+    tokens_per_conversation: float | None
+    cost_per_conversation: float | None
+    # Why a cost is missing, when it is.
+    cost_note: str | None = None
 
 
 # --- HTTP contract: the operations overview -----------------------------------

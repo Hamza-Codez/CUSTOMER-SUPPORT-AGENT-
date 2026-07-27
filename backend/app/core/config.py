@@ -6,10 +6,12 @@ or a database lives in code, so switching any of them is a config change.
 
 from __future__ import annotations
 
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -65,7 +67,14 @@ class Settings(BaseSettings):
     # Empty means the in-memory store. A URL means real Postgres.
     database_url: str = ""
 
-    # Dev-only static tokens: "<token>:<business_id>:<role>", comma separated.
+    # Signs session tokens. Generated per-process when unset so the app still
+    # boots with zero setup — which also means every restart signs everyone out,
+    # so set it in .env for anything you expect to stay logged into.
+    jwt_secret: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
+
+    # Static tokens for the demo and the test suite. Real accounts authenticate
+    # with a JWT from /auth/login; these remain so the seeded demo works without
+    # anyone signing up.
     dev_tokens: str = "demo-token:biz_demo:customer,ops-token:biz_demo:operator"
 
     # --- Email ----------------------------------------------------------------
@@ -90,6 +99,12 @@ class Settings(BaseSettings):
     # human instead of executing.
     auto_refund_cap: float = 25.00
     refund_window_days: int = 30
+
+    # Model pricing, per million tokens, for cost-per-conversation (SPEC §16.5).
+    # Zero by default and reported as unavailable rather than as 0.00 — a cost
+    # nobody has configured is not a cost of nothing.
+    cost_per_mtok_input: float = 0.0
+    cost_per_mtok_output: float = 0.0
 
     @property
     def store_kind(self) -> Literal["mock", "postgres"]:

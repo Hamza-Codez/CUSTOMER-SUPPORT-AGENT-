@@ -664,6 +664,95 @@ class TestSessionVerificationOnPostgres:
         assert len(await pg.get_verifications("biz_demo", session_id)) == 1
 
 
+class TestCommercialOnPostgres:
+    async def test_an_integration_request_round_trips(self, pg):
+        import uuid
+
+        from app.db.base import IntegrationRequest
+
+        request_id = f"int_{uuid.uuid4().hex[:10]}"
+        await pg.create_integration_request(
+            IntegrationRequest(
+                request_id=request_id,
+                business_id="biz_demo",
+                contact_name="Ayesha K.",
+                contact_email="ayesha@aeron.example.com",
+                website="https://aeron.example.com",
+                platform="Shopify",
+                monthly_conversations="2000",
+                notes="Product pages too.",
+            )
+        )
+        rows = await pg.list_integration_requests("biz_demo")
+        found = next(r for r in rows if r.request_id == request_id)
+        assert found.platform == "Shopify"
+        assert found.status == "new"
+
+    async def test_integration_requests_are_tenant_scoped(self, pg):
+        import uuid
+
+        from app.db.base import IntegrationRequest
+
+        marker = uuid.uuid4().hex[:10]
+        await pg.create_integration_request(
+            IntegrationRequest(
+                request_id=f"int_{marker}",
+                business_id="biz_other",
+                contact_name="Someone",
+                contact_email="other@example.com",
+            )
+        )
+        rows = await pg.list_integration_requests("biz_demo")
+        assert all(r.request_id != f"int_{marker}" for r in rows)
+
+    async def test_usage_aggregates_in_sql(self, pg):
+        import uuid
+
+        from app.db.base import UsageRecord
+
+        session_id = f"pg-usage-{uuid.uuid4().hex[:6]}"
+        before = await pg.usage_summary("biz_demo")
+
+        for _ in range(2):
+            await pg.record_usage(
+                UsageRecord(
+                    business_id="biz_demo",
+                    session_id=session_id,
+                    provider="gemini",
+                    model="gemini-flash-latest",
+                    requests=2,
+                    input_tokens=1000,
+                    output_tokens=250,
+                )
+            )
+
+        after = await pg.usage_summary("biz_demo")
+        # Two turns in one conversation is one conversation.
+        assert after.conversations == before.conversations + 1
+        assert after.input_tokens == before.input_tokens + 2000
+        assert after.output_tokens == before.output_tokens + 500
+        assert "gemini" in after.providers
+
+    async def test_conversation_count_comes_from_the_transcript(self, pg):
+        import uuid
+
+        from app.db.session_store import StoreSession
+
+        session_id = f"pg-conv-{uuid.uuid4().hex[:6]}"
+        before = await pg.conversation_count("biz_demo")
+
+        session = StoreSession(session_id, "biz_demo", pg)
+        await session.add_items([{"role": "user", "content": "hello"}])
+
+        assert await pg.conversation_count("biz_demo") == before + 1
+        await session.clear_session()
+
+    async def test_escalation_counts_group_in_sql(self, pg):
+        counts = await pg.escalation_counts("biz_demo")
+        assert set(counts) >= {"pending", "approved", "declined", "sessions"}
+        assert all(isinstance(v, int) for v in counts.values())
+
+
 class TestSessionPersistence:
     async def test_round_trip_and_ordering(self, pg):
         s = StoreSession("pg-session-test", "biz_demo", pg)

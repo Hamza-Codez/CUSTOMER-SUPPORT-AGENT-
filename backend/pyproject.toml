@@ -10,6 +10,8 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "asyncpg>=0.30",
+    # EmailStr validation; hand-rolled email regexes are a classic own goal.
+    "email-validator>=2.2",
 ]
 
 [dependency-groups]
