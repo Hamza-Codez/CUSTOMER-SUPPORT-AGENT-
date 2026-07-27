@@ -37,7 +37,7 @@ export function SiteHeader() {
           </Link>
           <Link
             href="/demo"
-            className="rounded-xl bg-accent px-3.5 py-2 text-[13px] font-medium text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)] transition hover:bg-accent-soft active:translate-y-px"
+            className="action rounded-xl px-3.5 py-2 text-[13px] font-medium transition active:translate-y-px"
           >
             Try the demo
           </Link>

@@ -81,7 +81,7 @@ export function ToolRack({
                   className={cn(
                     "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition",
                     active
-                      ? "border-accent/40 bg-accent/15 text-accent-soft"
+                      ? "border-ok/40 bg-ok/15 text-ok"
                       : "border-line bg-raised text-faint",
                   )}
                 >

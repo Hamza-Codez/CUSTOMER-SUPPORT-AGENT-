@@ -146,7 +146,7 @@ export default function FaqPage() {
             </p>
             <Link
               href="/demo"
-              className="mt-6 inline-flex h-11 items-center rounded-xl bg-accent px-5 text-sm font-medium text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)] transition hover:bg-accent-soft"
+              className="action mt-6 inline-flex h-11 items-center rounded-xl px-5 text-sm font-medium transition active:translate-y-px"
             >
               Try the demo
             </Link>

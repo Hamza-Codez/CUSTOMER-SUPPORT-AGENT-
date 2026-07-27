@@ -31,7 +31,7 @@ export const TOOLS: ToolSpec[] = [
     id: "route",
     name: "Triage",
     blurb: "Reads what the customer wants and hands it to the right specialist.",
-    kinds: ["routed"],
+    kinds: ["routed", "greeted"],
   },
   {
     id: "order_lookup",
@@ -97,6 +97,7 @@ export type Verdict = "ok" | "held" | "blocked" | "neutral";
 
 const VERDICTS: Record<string, Verdict> = {
   routed: "neutral",
+  greeted: "neutral",
   order_looked_up: "ok",
   order_not_found: "held",
   identity_check_failed: "blocked",

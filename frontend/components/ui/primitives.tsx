@@ -25,11 +25,9 @@ const button = cva(
   {
     variants: {
       variant: {
-        // Lit top edge + glow. The inset highlight is what stops a filled
-        // button reading as a coloured rectangle.
-        primary:
-          "rounded-xl bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22),0_1px_2px_rgb(0_0_0/0.4)] " +
-          "hover:bg-accent-soft hover:shadow-[inset_0_1px_0_0_rgb(255_255_255/0.28),0_6px_20px_-6px_rgb(168_85_247/0.6)]",
+        // Magenta, lit along the top edge. `action` carries the fill, the
+        // highlight and the glow so nothing here repeats a colour literal.
+        primary: "action rounded-xl",
         secondary:
           "rounded-xl border border-line bg-raised text-fg shadow-[inset_0_1px_0_0_rgb(255_255_255/0.04)] " +
           "hover:border-line-lit hover:bg-elevated",

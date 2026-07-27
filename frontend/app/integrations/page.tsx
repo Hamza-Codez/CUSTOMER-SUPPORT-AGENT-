@@ -9,9 +9,12 @@
  * live order data, which depends on the platform.
  */
 
-import { ArrowLeft, Check, Code2, Plug, Send, Webhook } from "lucide-react";
+import { ArrowLeft, Check, Code2, Plug, Send, Wand2, Webhook } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import * as React from "react";
+
+import integrationsImg from "../../public/assets/integrations.png";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
@@ -23,13 +26,13 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { API_BASE, ApiError, DEMO_CUSTOMER_TOKEN, api, getToken } from "@/lib/api";
-import { brand } from "@/lib/brand";
+import type { SiteKey } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const PLATFORMS = ["Shopify", "WooCommerce", "Magento", "Custom", "Other"];
 const VOLUMES = ["Under 500", "500 – 2,000", "2,000 – 10,000", "10,000+"];
 
-type Method = "widget" | "api" | "platform";
+type Method = "widget" | "preview" | "api" | "platform";
 
 export default function IntegrationsPage() {
   const [method, setMethod] = React.useState<Method>("widget");
@@ -48,12 +51,13 @@ export default function IntegrationsPage() {
             </Link>
             <p className="text-label mb-3 uppercase text-accent">Integration</p>
             <h1 className="text-title text-fg sm:text-display">
-              Three ways to put it on your store
+              Four ways to put it on your store
             </h1>
             <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-muted">
-              The widget takes a minute. The API is there when you want the
-              conversation inside your own interface. Connecting live order data
-              is the part that needs a person.
+              The widget takes a minute, and you can see it running on your own
+              storefront before you change a line of it. The API is there when you
+              want the conversation inside your own interface. Connecting live
+              order data is the part that needs a person.
             </p>
           </div>
         </section>
@@ -64,6 +68,7 @@ export default function IntegrationsPage() {
               {(
                 [
                   { id: "widget", label: "Embedded widget", icon: <Code2 size={14} /> },
+                  { id: "preview", label: "Try it on your site", icon: <Wand2 size={14} /> },
                   { id: "api", label: "Direct API", icon: <Webhook size={14} /> },
                   { id: "platform", label: "Your platform", icon: <Plug size={14} /> },
                 ] as const
@@ -74,7 +79,7 @@ export default function IntegrationsPage() {
                   className={cn(
                     "inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-[13px] transition",
                     method === tab.id
-                      ? "border-accent/40 bg-accent/12 text-accent-soft"
+                      ? "border-ok/40 bg-ok/12 text-ok"
                       : "border-line bg-raised text-muted hover:border-line-lit hover:text-fg",
                   )}
                 >
@@ -85,19 +90,31 @@ export default function IntegrationsPage() {
             </div>
 
             {method === "widget" && <WidgetMethod />}
+            {method === "preview" && <PreviewMethod />}
             {method === "api" && <ApiMethod />}
             {method === "platform" && <PlatformMethod />}
           </div>
         </section>
 
         <section className="border-t border-line bg-surface/30 px-5 py-14">
-          <div className="mx-auto max-w-xl">
-            <h2 className="text-heading text-fg">Connect your real orders</h2>
-            <p className="mb-7 mt-2.5 text-[14px] leading-relaxed text-muted">
-              This is the part a script tag can&apos;t do. Tell us where your
-              orders live and we&apos;ll come back with the steps for your setup.
-            </p>
-            <RequestForm />
+          <div className="mx-auto max-w-5xl">
+            <div className="grid gap-12 lg:grid-cols-[1.1fr_1fr] lg:items-center">
+              <div>
+                <h2 className="text-heading text-fg">Connect your real orders</h2>
+                <p className="mb-7 mt-2.5 text-[14px] leading-relaxed text-muted">
+                  This is the part a script tag can&apos;t do. Tell us where your
+                  orders live and we&apos;ll come back with the steps for your setup.
+                </p>
+                <RequestForm />
+              </div>
+              <div className="flex items-center justify-center lg:justify-end">
+                <Image
+                  src={integrationsImg}
+                  alt="Integrations"
+                  className="w-full max-w-56 object-contain lg:max-w-80"
+                />
+              </div>
+            </div>
           </div>
         </section>
       </main>
@@ -106,29 +123,152 @@ export default function IntegrationsPage() {
   );
 }
 
+/** Mints a real key and shows the real snippet.
+ *
+ * The previous version of this printed a script tag pointing at a CDN that did
+ * not exist, with a placeholder key nobody could obtain — a screenshot of an
+ * integration. Everything below comes back from the API: the key, the origins it
+ * is locked to, and the exact line to paste, assembled server-side so a copied
+ * snippet cannot disagree with itself.
+ */
 function WidgetMethod() {
-  const snippet = `<!-- ${brand.name} — paste before </body> -->
-<script
-  src="https://cdn.${brand.domain}/widget.js"
-  data-store="YOUR_STORE_KEY"
-  data-api="${API_BASE}"
-  defer
-></script>`;
+  const [keys, setKeys] = React.useState<SiteKey[] | null>(null);
+  const [origin, setOrigin] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const signedIn = useSignedIn();
+
+  // Bumped after a mint or a revoke to re-run the fetch below. A counter rather
+  // than calling the loader directly: the fetch lives entirely inside the effect
+  // so its result can be discarded if the component unmounts mid-flight.
+  const [reload, setReload] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!signedIn) return;
+    let cancelled = false;
+    api
+      .siteKeys()
+      .then((body) => !cancelled && setKeys(body.keys))
+      .catch(
+        (e) =>
+          !cancelled &&
+          setError(e instanceof ApiError ? e.message : "Couldn't load your keys."),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, reload]);
+
+  async function mint(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createSiteKey({
+        label: origin.trim() || "Storefront",
+        allowed_origins: [origin.trim()],
+      });
+      setOrigin("");
+      setReload((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't create that key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(key: string) {
+    setError(null);
+    try {
+      await api.revokeSiteKey(key);
+      setReload((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't revoke that key.");
+    }
+  }
+
+  const live = (keys ?? []).filter((k) => k.active && !k.preview);
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
       <div>
         <h2 className="mb-2 text-heading text-fg">One script tag</h2>
         <p className="mb-4 text-[13.5px] leading-relaxed text-muted">
-          Drop this before the closing <code className="text-accent-soft">&lt;/body&gt;</code>{" "}
-          on your storefront. The launcher appears bottom-right and inherits your
-          store key, so it only ever reads your data.
+          Paste it before the closing{" "}
+          <code className="text-accent-soft">&lt;/body&gt;</code> on your
+          storefront. The launcher appears bottom-right, in a shadow root, so it
+          can neither inherit your CSS nor leak its own.
         </p>
-        <CodeBlock code={snippet} />
-        <p className="mt-3 text-[12px] leading-relaxed text-faint">
-          Your store key is issued at sign-up and scopes every request to your
-          tenant. It is safe in client-side markup: it identifies a store, it does
-          not authorise reading anyone&apos;s account.
+
+        {!signedIn ? (
+          <Card className="p-5">
+            <p className="text-[13.5px] text-body">
+              Keys belong to an account, so this needs you signed in.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <Link
+                href="/signup"
+                className="action inline-flex h-10 items-center rounded-xl px-4 text-[13px] font-medium"
+              >
+                Create an account
+              </Link>
+              <Link
+                href="/login"
+                className="inline-flex h-10 items-center rounded-xl border border-line bg-raised px-4 text-[13px] text-body transition hover:border-line-lit"
+              >
+                Sign in
+              </Link>
+            </div>
+          </Card>
+        ) : (
+          <>
+            {live.length > 0 ? (
+              <div className="flex flex-col gap-4">
+                {live.map((key) => (
+                  <div key={key.key}>
+                    <CodeBlock code={key.snippet} />
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-faint">
+                      <span>
+                        Locked to {key.allowed_origins.join(", ") || "no origin"}
+                      </span>
+                      <button
+                        onClick={() => revoke(key.key)}
+                        className="ml-auto text-alert transition hover:underline"
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[13px] text-muted">
+                No keys yet. Add the domain your storefront runs on:
+              </p>
+            )}
+
+            <form onSubmit={mint} className="mt-4 flex flex-wrap gap-2">
+              <Input
+                value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+                placeholder="https://yourstore.com"
+                aria-label="Storefront domain"
+                className="min-w-48 flex-1"
+              />
+              <Button type="submit" disabled={busy || !origin.trim()}>
+                {busy ? "Creating…" : "Create key"}
+              </Button>
+            </form>
+            {error && <p className="mt-2 text-[12px] text-alert">{error}</p>}
+          </>
+        )}
+
+        <p className="mt-4 text-[12px] leading-relaxed text-faint">
+          The key is public and meant to be readable in your page source. It
+          identifies your store and authorises exactly one endpoint — starting a
+          customer conversation. It cannot read your operator queue, approve a
+          refund, or reach another business, and it only works from the domains
+          listed above.
         </p>
       </div>
 
@@ -136,7 +276,7 @@ function WidgetMethod() {
         <Label className="mb-3">What the customer gets</Label>
         <ul className="flex flex-col gap-3">
           {[
-            "A launcher that matches your site's colours",
+            "A launcher in the corner of every page",
             "Identity checked before any order detail appears",
             "Refunds settled or escalated according to your policy",
             "A themed summary email with a one-tap rating",
@@ -152,10 +292,133 @@ function WidgetMethod() {
   );
 }
 
+/** Try it on a real site with nothing installed.
+ *
+ * A browser extension was the obvious shape for this and the wrong one: it needs
+ * packaging and a store review, and it would only ever run for people who
+ * installed it. A bookmarklet is the same script injected by hand — no install,
+ * works on any page you can open, and it is honest about being a preview because
+ * it disappears the moment you navigate.
+ */
+function PreviewMethod() {
+  const [key, setKey] = React.useState<string | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const signedIn = useSignedIn();
+
+  async function mintPreview() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.createSiteKey({
+        label: "Preview",
+        allowed_origins: [],
+        preview: true,
+      });
+      setKey(created.key);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Couldn't create a preview key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const bookmarklet = key
+    ? `javascript:(function(){var s=document.createElement('script');` +
+      `s.src='${API_BASE}/widget.js';s.setAttribute('data-fte-key','${key}');` +
+      `document.body.appendChild(s);})();`
+    : "";
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
+      <div>
+        <h2 className="mb-2 text-heading text-fg">
+          See it on your own site, right now
+        </h2>
+        <p className="mb-4 text-[13.5px] leading-relaxed text-muted">
+          A preview key and a bookmarklet. Open your storefront, click the
+          bookmark, and the same widget appears over the real page — nothing
+          installed, nothing changed on your site.
+        </p>
+
+        {!signedIn ? (
+          <Card className="p-5 text-[13.5px] text-body">
+            Sign in to mint a preview key.
+          </Card>
+        ) : !key ? (
+          <Button onClick={mintPreview} disabled={busy}>
+            {busy ? "Creating…" : "Create a preview key"}
+          </Button>
+        ) : (
+          <>
+            <CodeBlock code={bookmarklet} language="javascript" />
+            <ol className="mt-4 flex flex-col gap-2 text-[13px] text-muted">
+              {[
+                "Copy the line above",
+                "Make a new browser bookmark and paste it as the URL",
+                "Open your storefront and click the bookmark",
+              ].map((step, i) => (
+                <li key={step} className="flex gap-2.5">
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md border border-line text-[10px] text-faint">
+                    {i + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </>
+        )}
+        {error && <p className="mt-2 text-[12px] text-alert">{error}</p>}
+      </div>
+
+      <Card className="p-5">
+        <Label className="mb-3">What a preview is and isn&apos;t</Label>
+        <ul className="flex flex-col gap-3 text-[13px] leading-relaxed">
+          <li className="flex gap-2.5 text-body">
+            <Check size={14} className="mt-0.5 shrink-0 text-ok" />
+            The real widget, the real agent, your real policies
+          </li>
+          <li className="flex gap-2.5 text-body">
+            <Check size={14} className="mt-0.5 shrink-0 text-ok" />
+            Only you see it — nothing is added to your site
+          </li>
+          <li className="flex gap-2.5 text-muted">
+            <span className="mt-0.5 shrink-0 text-warn">!</span>
+            A preview key accepts any origin, so revoke it when you&apos;re done
+          </li>
+          <li className="flex gap-2.5 text-muted">
+            <span className="mt-0.5 shrink-0 text-warn">!</span>
+            Sites with a strict content-security policy will block the injected
+            script; the script tag still works there
+          </li>
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
+/** Whether a session token exists, without tripping hydration.
+ *
+ * localStorage differs between the server render and the first client one, so
+ * this is read from an external store rather than an effect. */
+const NEVER_CHANGES = () => () => {};
+
+function useSignedIn(): boolean {
+  return React.useSyncExternalStore(
+    NEVER_CHANGES,
+    () => Boolean(getToken()),
+    () => false,
+  );
+}
+
 function ApiMethod() {
-  const snippet = `curl -X POST ${API_BASE}/chat \\
+  // The public endpoint, with the site key — the one a storefront can actually
+  // reach. Documenting the operator-token endpoint here would be telling sellers
+  // to put an operator credential in a browser.
+  const snippet = `curl -X POST ${API_BASE}/chat/public \\
   -H 'Content-Type: application/json' \\
-  -H 'Authorization: Bearer YOUR_TOKEN' \\
+  -H 'X-FTE-Site-Key: pk_your_site_key' \\
+  -H 'Origin: https://yourstore.com' \\
   -d '{
     "message": "Where is my order ORD-1002?",
     "session_id": "customer-8f21"
@@ -174,8 +437,9 @@ function ApiMethod() {
       <div>
         <h2 className="mb-2 text-heading text-fg">Talk to it directly</h2>
         <p className="mb-4 text-[13.5px] leading-relaxed text-muted">
-          One endpoint. Send a message and a session id; the session is the
-          conversation&apos;s memory, so reuse it for follow-ups.
+          One endpoint, authorised by the same site key the widget uses. Send a
+          message and a session id; the session is the conversation&apos;s
+          memory, so reuse it for follow-ups.
         </p>
         <CodeBlock code={snippet} language="bash" />
       </div>
@@ -240,8 +504,8 @@ function RequestForm() {
     contact_name: "",
     contact_email: "",
     website: "",
-    platform: "",
-    monthly_conversations: "",
+    platform: PLATFORMS[0],
+    monthly_conversations: VOLUMES[0],
     notes: "",
   });
   const [sending, setSending] = React.useState(false);
@@ -397,8 +661,8 @@ function Choices({
           className={cn(
             "rounded-lg border px-3 py-1.5 text-[12px] transition",
             value === option
-              ? "border-accent bg-accent/15 text-accent-soft"
-              : "border-line bg-raised text-muted hover:border-accent/40 hover:text-fg",
+              ? "border-ok/40 bg-ok/12 text-ok"
+              : "border-line bg-raised text-muted hover:border-line-lit hover:text-fg",
           )}
         >
           {option}

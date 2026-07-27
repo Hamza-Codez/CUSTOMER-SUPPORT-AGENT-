@@ -161,9 +161,9 @@ export function ChatWidget({
               aria-label="Send"
               className={cn(
                 "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition",
-                "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)]",
-                "hover:bg-accent-soft active:translate-y-px",
-                "disabled:bg-elevated disabled:text-faint disabled:shadow-none",
+                "action",
+                "active:translate-y-px",
+                "disabled:bg-elevated disabled:bg-none disabled:text-faint disabled:shadow-none",
               )}
             >
               {busy ? (
@@ -230,17 +230,31 @@ function Bubble({ message }: { message: Message }) {
 }
 
 /** The waiting state, narrating the shape of the work rather than pretending to
- * know which tool is running. The chips afterwards are the real record. */
+ * know which tool is running. The chips afterwards are the real record.
+ *
+ * Past the last stage it switches to a clock. The previous version clamped at
+ * "Composing a reply…" and sat there indefinitely, which turned a slow turn into
+ * something indistinguishable from a hang — the exact complaint that prompted
+ * this. Counting seconds is less reassuring and more true. */
 function Working() {
-  const [stage, setStage] = React.useState(0);
+  const [elapsed, setElapsed] = React.useState(0);
 
   React.useEffect(() => {
+    const started = Date.now();
     const timer = setInterval(
-      () => setStage((s) => Math.min(s + 1, WORKING_STAGES.length - 1)),
-      900,
+      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
+      500,
     );
     return () => clearInterval(timer);
   }, []);
+
+  const stage = Math.floor(elapsed / 1.2);
+  const narrating = stage < WORKING_STAGES.length;
+  const label = narrating
+    ? `${WORKING_STAGES[stage]}…`
+    : elapsed < 20
+      ? `Still working — ${elapsed}s`
+      : `Still working — ${elapsed}s. It may be starting up, or rate-limited.`;
 
   return (
     <div className="flex flex-col gap-2 py-0.5">
@@ -255,11 +269,11 @@ function Working() {
           ))}
         </span>
         <span
-          key={stage}
+          key={narrating ? stage : "elapsed"}
           className="animate-slide-in text-[12.5px] text-muted"
           aria-live="polite"
         >
-          {WORKING_STAGES[stage]}…
+          {label}
         </span>
       </div>
       <span className="relative h-px w-full overflow-hidden rounded bg-line">

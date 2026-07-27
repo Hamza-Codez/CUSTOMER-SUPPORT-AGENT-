@@ -53,7 +53,7 @@ export default function HomePage() {
               <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
                 <Link
                   href="/demo"
-                  className="inline-flex h-12 items-center gap-2 rounded-xl bg-accent px-6 text-[15px] font-medium text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22),0_8px_28px_-10px_rgb(168_85_247/0.7)] transition hover:bg-accent-soft active:translate-y-px"
+                  className="action inline-flex h-12 items-center gap-2 rounded-xl px-6 text-[15px] font-medium transition active:translate-y-px"
                 >
                   Watch it work <ArrowRight size={16} />
                 </Link>
@@ -108,7 +108,7 @@ export default function HomePage() {
                     </Chip>
                   </div>
                   <div className="mt-4 flex gap-2">
-                    <span className="rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white">
+                    <span className="action rounded-lg px-3 py-1.5 text-[12px] font-medium">
                       Approve
                     </span>
                     <span className="rounded-lg border border-line px-3 py-1.5 text-[12px] text-muted">
@@ -122,7 +122,7 @@ export default function HomePage() {
         </section>
 
         {/* The tools — the thing that makes it an employee rather than a box */}
-        <section className="border-b border-line px-5 py-20">
+        <section className="aura-muted relative overflow-hidden border-b border-line px-5 py-20">
           <div className="mx-auto max-w-5xl">
             <p className="text-label mb-3 uppercase text-accent">
               What it can actually do
@@ -200,7 +200,7 @@ export default function HomePage() {
         </section>
 
         {/* Close */}
-        <section className="px-5 py-24">
+        <section className="aura-bottom relative overflow-hidden px-5 py-24">
           <div className="mx-auto max-w-2xl text-center">
             <Mark size={40} className="mx-auto mb-6" />
             <h2 className="text-title text-fg">
@@ -213,7 +213,7 @@ export default function HomePage() {
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Link
                 href="/demo"
-                className="inline-flex h-12 items-center gap-2 rounded-xl bg-accent px-6 text-[15px] font-medium text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)] transition hover:bg-accent-soft"
+                className="action inline-flex h-12 items-center gap-2 rounded-xl px-6 text-[15px] font-medium transition active:translate-y-px"
               >
                 Try the demo <ArrowRight size={16} />
               </Link>

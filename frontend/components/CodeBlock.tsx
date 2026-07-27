@@ -39,9 +39,14 @@ export function CodeBlock({
         <span className="text-label uppercase text-faint">{language}</span>
         <button
           onClick={copy}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-muted transition hover:bg-raised hover:text-fg"
+          className={cn(
+            "ml-auto inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition",
+            copied
+              ? "bg-ok/[0.08] text-ok"
+              : "text-muted hover:bg-raised hover:text-fg"
+          )}
         >
-          {copied ? <Check size={11} /> : <Copy size={11} />}
+          {copied ? <Check size={11} className="text-ok" /> : <Copy size={11} />}
           {copied ? "Copied" : "Copy"}
         </button>
       </div>

@@ -198,9 +198,7 @@ export default function DemoPage() {
     <div className="flex h-dvh flex-col bg-ink">
       <header className="border-b border-line bg-surface/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
-          <Link href="/">
-            <Wordmark />
-          </Link>
+          <Wordmark />
 
           <SideToggle side={side} onChange={setSide} />
 
@@ -350,7 +348,7 @@ export default function DemoPage() {
                       <>
                         <Link
                           href="/pricing"
-                          className="inline-flex h-10 items-center gap-2 rounded-xl bg-accent px-4 text-sm font-medium text-white transition hover:bg-accent-soft"
+                          className="action inline-flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-medium transition active:translate-y-px"
                         >
                           See pricing <ArrowRight size={15} />
                         </Link>
@@ -422,10 +420,8 @@ function SideToggle({
           aria-selected={side === o.id}
           onClick={() => onChange(o.id)}
           className={cn(
-            "flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition",
-            side === o.id
-              ? "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)]"
-              : "text-muted hover:text-fg",
+            "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition",
+            side === o.id ? "bg-ok/20 text-ok shadow-[inset_0_1px_0_0_rgb(255_255_255/0.1)]" : "text-muted hover:text-fg",
           )}
         >
           {o.icon}

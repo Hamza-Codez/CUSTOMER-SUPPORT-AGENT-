@@ -153,6 +153,37 @@ export type IntegrationAccepted = {
   message: string;
 };
 
+export type SiteKey = {
+  key: string;
+  label: string;
+  allowed_origins: string[];
+  preview: boolean;
+  active: boolean;
+  created_at: string;
+  revoked_at: string | null;
+  /** Assembled server-side, so a copied snippet can never disagree with itself. */
+  snippet: string;
+};
+
+export type SiteKeyList = { keys: SiteKey[] };
+
+export type ScannedPage = {
+  url: string;
+  title: string;
+  topic: string;
+  text: string;
+  /** Why this page was picked — shown so the seller can see we didn't guess. */
+  matched: string;
+};
+
+export type SiteScanResult = {
+  site: string;
+  pages: ScannedPage[];
+  /** [url, reason] for pages we tried and couldn't use. */
+  skipped: string[][];
+  note: string;
+};
+
 export type Account = {
   user_id: string;
   business_id: string;

@@ -106,9 +106,7 @@ export default function DashboardPage() {
     <div className="flex h-dvh flex-col bg-ink">
       <header className="border-b border-line bg-surface/70 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
-          <Link href="/">
-            <Wordmark />
-          </Link>
+          <Wordmark />
 
           <ModeToggle mode={mode} onChange={switchMode} />
 
@@ -223,10 +221,10 @@ function ModeToggle({
           aria-selected={mode === option.id}
           onClick={() => onChange(option.id)}
           className={cn(
-            "flex items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition",
-            mode === option.id
-              ? "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)]"
-              : "text-muted hover:text-fg",
+            // 6px inside an 8px container with 2px padding — concentric, so the
+            // gap between the two curves stays even.
+            "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition",
+            mode === option.id ? "bg-ok/20 text-ok shadow-[inset_0_1px_0_0_rgb(255_255_255/0.1)]" : "text-muted hover:text-fg",
           )}
         >
           {option.icon}

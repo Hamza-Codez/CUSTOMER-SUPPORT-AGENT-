@@ -12,7 +12,7 @@
  * nothing else. Step three proves it by letting them ask.
  */
 
-import { ArrowRight, Check, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Globe, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 
@@ -26,6 +26,7 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { ApiError, api, getAccount, getToken } from "@/lib/api";
+import type { SiteScanResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Draft = { topic: string; body: string };
@@ -109,7 +110,7 @@ export default function OnboardingPage() {
                     className={cn(
                       "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
                       i === step
-                        ? "border-accent bg-accent text-white"
+                        ? "border-magenta bg-magenta text-white"
                         : i < step
                           ? "border-accent/40 bg-accent/15 text-accent-soft"
                           : "border-line text-faint",
@@ -142,6 +143,23 @@ export default function OnboardingPage() {
                 outside them and it will say it can&apos;t confirm, rather than
                 inventing a rule that sounds plausible.
               </p>
+
+              <SiteScanPanel
+                onImport={(imported) =>
+                  // Replaces the starters rather than appending to them: the
+                  // seller's own words are the point, and leaving ours mixed in
+                  // is how a demo policy ends up quoted at a real customer.
+                  setDrafts((prev) => {
+                    const kept = prev.filter(
+                      (d) =>
+                        d.topic.trim() &&
+                        d.body.trim() &&
+                        !STARTERS.some((s) => s.body === d.body),
+                    );
+                    return [...kept, ...imported];
+                  })
+                }
+              />
 
               <div className="flex flex-col gap-3">
                 {drafts.map((draft, i) => (
@@ -275,5 +293,161 @@ export default function OnboardingPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+/** Read the seller's own site and propose what to import.
+ *
+ * Onboarding used to require finding, copying and formatting policies the seller
+ * had already published. This does that part, then stops: the extracted text is
+ * shown, ticked and editable before it becomes something the agent will quote at
+ * a customer. A heuristic that ran unattended deciding what your support agent
+ * may say is exactly the kind of thing this product exists not to do.
+ */
+function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
+  const [url, setUrl] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [result, setResult] = React.useState<SiteScanResult | null>(null);
+  const [chosen, setChosen] = React.useState<Set<string>>(() => new Set());
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function scan(event: React.FormEvent) {
+    event.preventDefault();
+    if (!url.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = await api.scanSite(url.trim());
+      setResult(body);
+      // Everything found is ticked by default — the seller is confirming, not
+      // assembling. Untick what's wrong.
+      setChosen(new Set(body.pages.map((p) => p.url)));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't read that site.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function importChosen() {
+    if (!result) return;
+    onImport(
+      result.pages
+        .filter((p) => chosen.has(p.url))
+        .map((p) => ({ topic: p.topic, body: p.text })),
+    );
+    setResult(null);
+    setUrl("");
+  }
+
+  return (
+    <Card className="mb-5 p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <Globe size={15} className="text-accent-soft" />
+        <p className="text-[14px] font-medium text-fg">
+          Already published them? Point us at your site
+        </p>
+      </div>
+      <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
+        We&apos;ll read your storefront, find the shipping, returns and FAQ pages,
+        and show you the text before anything is saved. Policies only — live order
+        data needs a proper connection, which is a conversation.
+      </p>
+
+      <form onSubmit={scan} className="flex flex-wrap gap-2">
+        <Input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://yourstore.com"
+          aria-label="Your storefront address"
+          className="min-w-48 flex-1"
+        />
+        <Button type="submit" variant="secondary" disabled={busy || !url.trim()}>
+          {busy ? "Reading…" : "Scan"}
+        </Button>
+      </form>
+
+      {error && <p className="mt-3 text-[12.5px] text-alert">{error}</p>}
+
+      {result && (
+        <div className="mt-4 flex flex-col gap-2">
+          {result.note && (
+            <p className="text-[12.5px] leading-relaxed text-muted">
+              {result.note}
+            </p>
+          )}
+
+          {result.pages.map((page) => {
+            const on = chosen.has(page.url);
+            return (
+              <label
+                key={page.url}
+                className={cn(
+                  "flex cursor-pointer gap-3 rounded-xl border p-3 transition",
+                  on
+                    ? "border-accent/35 bg-accent/[0.06]"
+                    : "border-line hover:border-line-lit",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() =>
+                    setChosen((prev) => {
+                      const next = new Set(prev);
+                      if (on) next.delete(page.url);
+                      else next.add(page.url);
+                      return next;
+                    })
+                  }
+                  className="mt-1 h-3.5 w-3.5 shrink-0 accent-current"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] font-medium text-fg">
+                    {page.topic}
+                    <span className="ml-2 font-normal text-faint">
+                      {page.matched}
+                    </span>
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11.5px] text-faint">
+                    {page.url}
+                  </span>
+                  <span className="mt-1.5 line-clamp-3 block text-[12px] leading-relaxed text-muted">
+                    {page.text}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+
+          {result.skipped.length > 0 && (
+            <details className="text-[12px] text-faint">
+              <summary className="cursor-pointer">
+                {result.skipped.length} page
+                {result.skipped.length === 1 ? "" : "s"} couldn&apos;t be read
+              </summary>
+              <ul className="mt-2 flex flex-col gap-1 pl-3">
+                {result.skipped.map(([pageUrl, reason]) => (
+                  <li key={pageUrl} className="truncate">
+                    {pageUrl} — {reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {result.pages.length > 0 && (
+            <Button
+              className="mt-1 self-start"
+              size="sm"
+              onClick={importChosen}
+              disabled={chosen.size === 0}
+            >
+              Import {chosen.size} page{chosen.size === 1 ? "" : "s"} to edit
+            </Button>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

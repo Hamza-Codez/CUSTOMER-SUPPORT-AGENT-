@@ -175,7 +175,7 @@ function Plan({
           href={href}
           className={`mt-5 inline-flex h-10 w-full items-center justify-center rounded-xl text-sm font-medium transition active:translate-y-px ${
             featured
-              ? "bg-accent text-white shadow-[inset_0_1px_0_0_rgb(255_255_255/0.22)] hover:bg-accent-soft"
+              ? "action"
               : "border border-line bg-raised text-body hover:border-line-lit"
           }`}
         >
