@@ -21,7 +21,7 @@ the risky calls as a one-click decision for a person.
 | Directory | Status |
 |---|---|
 | [backend/](backend/) | **Phases 1–5 complete** — agent team, guardrails, gated refunds, human approval, grounded RAG, summary mailer |
-| [frontend/](frontend/) | **Phase 6 complete** — marketing pages, role gateway, dual customer/seller dashboard |
+| [frontend/](frontend/) | **Phases 6–7 complete** — marketing pages, dual dashboard, and the guided demo playground |
 
 Start with [backend/README.md](backend/README.md). It runs with zero setup:
 
@@ -41,5 +41,5 @@ Next.js · FastAPI on `uv`/`uvicorn` · OpenAI Agents SDK · Gemini · PostgreSQ
 4. **Knowledge** — doc parsing, RAG, grounding guardrail ✅
 5. **Comms** — SMTP themed mailer + feedback form ✅
 6. **Frontend** — marketing pages, auth, dual dashboard ✅
-7. Demo — the guided playground on seed data
+7. **Demo** — the guided playground on seed data ✅
 8. Commercialise — pricing, integration requests, analytics

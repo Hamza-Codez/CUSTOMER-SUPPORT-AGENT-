@@ -277,6 +277,13 @@ class MockStore(Store):
     # stores returned different orders they could resolve a tie differently and
     # the "identical behaviour on either store" guarantee would be a fiction.
 
+    async def list_orders(
+        self, business_id: str, limit: int = 50
+    ) -> list[OrderRecord]:
+        rows = [o for o in self._orders.values() if o.business_id == business_id]
+        rows.sort(key=lambda o: (o.placed_at, o.order_id), reverse=True)
+        return rows[:limit]
+
     async def list_products(self, business_id: str) -> list[ProductRecord]:
         return sorted(
             (p for p in self._products if p.business_id == business_id),

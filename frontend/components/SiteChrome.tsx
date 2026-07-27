@@ -27,7 +27,7 @@ export function SiteHeader() {
             Pricing
           </Link>
           <Link
-            href="/login"
+            href="/demo"
             className="rounded-xl bg-accent px-3.5 py-2 text-[13px] font-medium text-white transition hover:bg-accent-soft"
           >
             Try the demo
@@ -50,7 +50,7 @@ export function SiteFooter() {
           <Link href="/pricing" className="transition hover:text-body">
             Pricing
           </Link>
-          <Link href="/login" className="transition hover:text-body">
+          <Link href="/demo" className="transition hover:text-body">
             Demo
           </Link>
         </div>

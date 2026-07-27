@@ -89,6 +89,15 @@ def _text_of(item: dict[str, Any]) -> str:
     return ""
 
 
+def _latest_first(pattern: re.Pattern[str], latest: str, history: str):
+    """Prefer an entity from the current message, falling back to the conversation.
+
+    "Refund ORD-1005" must not pick up the ORD-1002 someone asked about earlier,
+    but "my email is …" as a follow-up still needs the order id from before it.
+    """
+    return pattern.search(latest) or pattern.search(history)
+
+
 def _message(text: str) -> ResponseOutputMessage:
     return ResponseOutputMessage(
         id="mock_msg",
@@ -317,12 +326,25 @@ class MockModel(Model):
                 # sentence explaining why, not a typed result.
                 rejections.append(raw)
 
-        user_text = " ".join(_text_of(i) for i in items if i.get("role") == "user")
-        lowered = user_text.lower()
+        # Intent comes from what the customer just said; entities may come from
+        # anywhere in the conversation.
+        #
+        # Conflating the two is a real bug the demo caught: with the whole history
+        # scored for intent, "which desk is better?" still contained "my order"
+        # from three messages earlier and routed to Orders, and a refund request
+        # for ORD-1005 picked up ORD-1002 from the backlog. But entities genuinely
+        # do span turns — an order id in one message and the email in the next is
+        # the most natural way for someone to answer.
+        user_messages = [
+            _text_of(i) for i in items if i.get("role") == "user"
+        ]
+        latest = user_messages[-1] if user_messages else ""
+        history = " ".join(user_messages)
+        lowered = latest.lower()
 
         # 2. Routing agent (has handoffs, no tools of its own).
         if handoffs and not tools:
-            return self._route(lowered, handoffs)
+            return self._route(lowered, history.lower(), handoffs)
 
         available = {getattr(t, "name", "") for t in tools}
         wants_refund = any(w in lowered for w in REFUND_WORDS)
@@ -356,7 +378,7 @@ class MockModel(Model):
                     f"{rejections[-1] if rejections else ''} "
                     "Let me get a colleague to pick this up with you."
                 )
-            step = self._refund_step(seen, user_text)
+            step = self._refund_step(seen, latest, history)
             if step is not None:
                 return step
 
@@ -367,11 +389,11 @@ class MockModel(Model):
 
         # 5. Otherwise pick the one tool that fits and call it.
         if "policy_retriever" in available and any(w in lowered for w in POLICY_WORDS):
-            return self._tool("policy_retriever", {"question": user_text})
+            return self._tool("policy_retriever", {"question": latest})
 
         if "order_lookup" in available:
-            order = ORDER_RE.search(user_text)
-            email = EMAIL_RE.search(user_text)
+            order = _latest_first(ORDER_RE, latest, history)
+            email = _latest_first(EMAIL_RE, latest, history)
             if order and email:
                 return self._tool(
                     "order_lookup",
@@ -381,15 +403,15 @@ class MockModel(Model):
                 return self._say(ASK_FOR_DETAILS)
 
         if "product_catalog" in available:
-            return self._tool("product_catalog", {"query": user_text})
+            return self._tool("product_catalog", {"query": latest})
 
         if "policy_retriever" in available:
-            return self._tool("policy_retriever", {"question": user_text})
+            return self._tool("policy_retriever", {"question": latest})
 
         return self._say(FALLBACK)
 
     def _refund_step(
-        self, seen: dict[str, dict[str, Any]], user_text: str
+        self, seen: dict[str, dict[str, Any]], latest: str, history: str
     ) -> ModelResponse | None:
         """Next step of the refund chain, or None to fall through."""
         if "refund" in seen:
@@ -397,13 +419,13 @@ class MockModel(Model):
 
         # Ground the ruling in the written policy first.
         if "policy" not in seen:
-            return self._tool("policy_retriever", {"question": user_text})
+            return self._tool("policy_retriever", {"question": latest})
 
         # Then prove who we are talking to.
         order_result = seen.get("order")
         if order_result is None:
-            order = ORDER_RE.search(user_text)
-            email = EMAIL_RE.search(user_text)
+            order = _latest_first(ORDER_RE, latest, history)
+            email = _latest_first(EMAIL_RE, latest, history)
             if order and email:
                 return self._tool(
                     "order_lookup",
@@ -431,18 +453,28 @@ class MockModel(Model):
             output=[_call(name, arguments)], usage=Usage(), response_id=None
         )
 
-    def _route(self, lowered: str, handoffs: list[Any]) -> ModelResponse:
+    def _route(
+        self, latest: str, history: str, handoffs: list[Any]
+    ) -> ModelResponse:
+        """Route on the latest message; fall back to the conversation's intent.
+
+        A follow-up often carries none of its own — "ayesha.k@example.com" on its
+        own is not an order question, but it is plainly an answer to one. Latest
+        first so a change of subject is honoured, history second so a bare reply
+        stays with the specialist already handling it.
+        """
         by_agent = {getattr(h, "agent_name", ""): h for h in handoffs}
 
-        for agent_name, triggers in ROUTING:
-            if agent_name in by_agent and any(t in lowered for t in triggers):
-                return ModelResponse(
-                    output=[_call(by_agent[agent_name].tool_name, {})],
-                    usage=Usage(),
-                    response_id=None,
-                )
+        for text in (latest, history):
+            for agent_name, triggers in ROUTING:
+                if agent_name in by_agent and any(t in text for t in triggers):
+                    return ModelResponse(
+                        output=[_call(by_agent[agent_name].tool_name, {})],
+                        usage=Usage(),
+                        response_id=None,
+                    )
 
-        # Nothing matched. Support is the safest default: it is the only
+        # Nothing matched anywhere. Support is the safest default: it is the only
         # specialist that can answer without first needing account details.
         if "Support" in by_agent:
             return ModelResponse(

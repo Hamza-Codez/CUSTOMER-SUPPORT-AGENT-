@@ -53,6 +53,31 @@ _ORDER_SELECT = """
 """
 
 
+# The operator's own view of their orders. Written out rather than derived from
+# _ORDER_SELECT: a query you have to mentally string-edit to read is a query
+# nobody will notice a mistake in.
+_ORDER_LIST = """
+    select o.order_id,
+           o.business_id,
+           c.email                as customer_email,
+           c.name                 as customer_name,
+           o.status,
+           o.placed_at,
+           o.carrier,
+           o.tracking_number,
+           o.eta,
+           o.total,
+           coalesce((select sum(oi.qty)
+                     from fte.order_items oi
+                     where oi.order_ref = o.id), 0)::int as item_count
+      from fte.orders o
+      join fte.customers c on c.id = o.customer_id
+     where o.business_id = $1
+     order by o.placed_at desc, o.order_id desc
+     limit $2
+"""
+
+
 def _money(value: Decimal | None) -> str:
     return f"{Decimal(value or 0):.2f}"
 
@@ -155,6 +180,28 @@ class PostgresStore(Store):
             item_count=row["item_count"],
             total=_money(row["total"]),
         )
+
+    async def list_orders(
+        self, business_id: str, limit: int = 50
+    ) -> list[OrderRecord]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(_ORDER_LIST, business_id, limit)
+        return [
+            OrderRecord(
+                order_id=r["order_id"],
+                business_id=r["business_id"],
+                customer_email=r["customer_email"],
+                customer_name=r["customer_name"],
+                status=r["status"],
+                placed_at=_date(r["placed_at"]) or "",
+                carrier=r["carrier"],
+                tracking_number=r["tracking_number"],
+                eta=_date(r["eta"]),
+                item_count=r["item_count"],
+                total=_money(r["total"]),
+            )
+            for r in rows
+        ]
 
     async def list_products(self, business_id: str) -> list[ProductRecord]:
         async with self.pool.acquire() as conn:

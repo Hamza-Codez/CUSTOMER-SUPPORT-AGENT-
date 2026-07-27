@@ -63,6 +63,55 @@ export type Health = {
   db: "up" | "down";
 };
 
+export type OrderSummary = {
+  order_id: string;
+  customer_name: string;
+  status: string;
+  placed_at: string;
+  eta: string | null;
+  item_count: number;
+  total: string;
+};
+
+export type ProductSummary = {
+  product_id: string;
+  name: string;
+  price: string;
+  stock: number;
+  in_stock: boolean;
+  summary: string;
+};
+
+export type PolicySummary = {
+  doc: string;
+  topic: string;
+  source_ref: string;
+};
+
+export type ActivityEntry = {
+  actor: string;
+  action: string;
+  target: string;
+  outcome: string;
+  ts: string;
+};
+
+export type Overview = {
+  orders: OrderSummary[];
+  products: ProductSummary[];
+  policies: PolicySummary[];
+  recent_activity: ActivityEntry[];
+  counts: Record<string, number>;
+};
+
+export type EmailPreview = {
+  subject: string;
+  body_html: string;
+  recipient: string;
+  status: string;
+  feedback_token: string;
+};
+
 /** Chat transcript entry. `pending` drives the typing indicator. */
 export type Message = {
   id: string;

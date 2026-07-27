@@ -170,7 +170,7 @@ function Plan({
         <p className="mt-1 text-[12px] text-accent-soft">{yearly}</p>
         <p className="mt-4 text-[13px] leading-relaxed text-muted">{blurb}</p>
         <Link
-          href="/login"
+          href="/demo"
           className={`mt-5 inline-flex h-10 w-full items-center justify-center rounded-xl text-sm font-medium transition ${
             featured
               ? "bg-accent text-white hover:bg-accent-soft"

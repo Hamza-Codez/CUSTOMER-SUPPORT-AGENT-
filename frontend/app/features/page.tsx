@@ -157,7 +157,7 @@ export default function FeaturesPage() {
               the seller view and find the decision waiting.
             </p>
             <Link
-              href="/login"
+              href="/demo"
               className="mt-6 inline-flex h-11 items-center rounded-xl bg-accent px-5 text-sm font-medium text-white transition hover:bg-accent-soft"
             >
               Try the demo

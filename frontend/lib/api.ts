@@ -9,9 +9,11 @@
 import type {
   ChatResponse,
   DecisionResponse,
+  EmailPreview,
   EscalationList,
   FeedbackSummary,
   Health,
+  Overview,
 } from "./types";
 
 export const API_BASE =
@@ -91,25 +93,55 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * The demo tour needs to act as both sides of the conversation in one browser
+ * tab — chat as the customer, then approve as the operator — so calls accept an
+ * explicit token. These are the public demo tokens against seed data; nothing
+ * here is a way around the backend's auth, which still checks every one.
+ */
+export const DEMO_CUSTOMER_TOKEN = "demo-token";
+export const DEMO_OPERATOR_TOKEN = "ops-token";
+
 export const api = {
   health: () => request<Health>("/health", { token: null }),
 
-  chat: (message: string, sessionId: string) =>
+  chat: (message: string, sessionId: string, token?: string) =>
     request<ChatResponse>("/chat", {
       method: "POST",
       body: { message, session_id: sessionId },
+      ...(token ? { token } : {}),
     }),
 
-  escalations: (status?: "pending" | "approved" | "declined") =>
+  escalations: (
+    status?: "pending" | "approved" | "declined",
+    token?: string,
+  ) =>
     request<EscalationList>(
       `/dashboard/escalations${status ? `?status_filter=${status}` : ""}`,
+      token ? { token } : {},
     ),
 
-  decide: (id: string, decision: "approve" | "decline", reason?: string) =>
+  decide: (
+    id: string,
+    decision: "approve" | "decline",
+    reason?: string,
+    token?: string,
+  ) =>
     request<DecisionResponse>(`/escalations/${id}/decision`, {
       method: "POST",
       body: { decision, reason: reason || null },
+      ...(token ? { token } : {}),
     }),
 
-  feedback: () => request<FeedbackSummary>("/dashboard/feedback"),
+  feedback: (token?: string) =>
+    request<FeedbackSummary>("/dashboard/feedback", token ? { token } : {}),
+
+  overview: (token?: string) =>
+    request<Overview>("/dashboard/overview", token ? { token } : {}),
+
+  emailPreview: (sessionId: string, token?: string) =>
+    request<EmailPreview>(
+      `/dashboard/emails/${encodeURIComponent(sessionId)}`,
+      token ? { token } : {},
+    ),
 };

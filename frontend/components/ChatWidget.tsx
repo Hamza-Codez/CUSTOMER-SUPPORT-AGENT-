@@ -6,7 +6,7 @@ import * as React from "react";
 import { ActionChips } from "@/components/ActionChips";
 import { Button } from "@/components/ui/primitives";
 import { ApiError, api } from "@/lib/api";
-import type { Message } from "@/lib/types";
+import type { ChatResponse, Message } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** One-tap starters, so the first message is never a blank box. */
@@ -27,7 +27,29 @@ const QUICK_LABELS = [
 let counter = 0;
 const nextId = () => `m${++counter}`;
 
-export function ChatWidget({ sessionId }: { sessionId: string }) {
+/** Lets the guided tour drive this widget rather than reimplement it.
+ *
+ * The demo has to run the real chat surface against the real backend — a
+ * scripted lookalike would prove nothing, which is the whole point of a demo on
+ * seed data. */
+export type ChatHandle = { send: (text: string) => void };
+
+export function ChatWidget({
+  sessionId,
+  token,
+  quickReplies,
+  onExchange,
+  ref,
+}: {
+  sessionId: string;
+  /** Explicit token; the demo acts as the customer regardless of who signed in. */
+  token?: string;
+  quickReplies?: { label: string; text: string }[];
+  /** Fires after each completed turn, so the tour can advance on real results. */
+  onExchange?: (response: ChatResponse) => void;
+  /** React 19 passes `ref` as a plain prop; no forwardRef needed. */
+  ref?: React.Ref<ChatHandle>;
+}) {
   const [messages, setMessages] = React.useState<Message[]>([]);
   const [draft, setDraft] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -54,7 +76,7 @@ export function ChatWidget({ sessionId }: { sessionId: string }) {
     setBusy(true);
 
     try {
-      const response = await api.chat(trimmed, sessionId);
+      const response = await api.chat(trimmed, sessionId, token);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === placeholder.id
@@ -67,6 +89,7 @@ export function ChatWidget({ sessionId }: { sessionId: string }) {
             : m,
         ),
       );
+      onExchange?.(response);
     } catch (error) {
       const detail =
         error instanceof ApiError ? error.message : "Something went wrong.";
@@ -82,6 +105,15 @@ export function ChatWidget({ sessionId }: { sessionId: string }) {
       inputRef.current?.focus();
     }
   }
+
+  // Writing to a ref during render is not allowed — React may not have
+  // committed yet, and the value can be discarded. useImperativeHandle is the
+  // supported way to expose an action to a parent.
+  React.useImperativeHandle(ref, () => ({ send }));
+
+  const chips =
+    quickReplies ??
+    QUICK_REPLIES.map((text, i) => ({ label: QUICK_LABELS[i], text }));
 
   return (
     <div className="flex h-full flex-col">
@@ -112,17 +144,17 @@ export function ChatWidget({ sessionId }: { sessionId: string }) {
       <div className="border-t border-line bg-surface/60 px-4 py-3 sm:px-6">
         <div className="mx-auto max-w-2xl">
           <div className="mb-2.5 flex flex-wrap gap-1.5">
-            {QUICK_REPLIES.map((reply, i) => (
+            {chips.map((chip) => (
               <button
-                key={reply}
-                onClick={() => send(reply)}
+                key={chip.label}
+                onClick={() => send(chip.text)}
                 disabled={busy}
                 className={cn(
                   "rounded-full border border-line bg-raised px-3 py-1.5 text-[12px] text-muted transition",
                   "hover:border-accent/50 hover:text-fg disabled:opacity-40",
                 )}
               >
-                {QUICK_LABELS[i]}
+                {chip.label}
               </button>
             ))}
           </div>

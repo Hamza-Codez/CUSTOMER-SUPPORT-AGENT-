@@ -38,16 +38,22 @@ from app.handoffs.human_escalation import (
     to_public_card,
 )
 from app.schemas import (
+    ActivityEntry,
     AgentAction,
     ChatRequest,
     ChatResponse,
     DecisionRequest,
     DecisionResponse,
+    EmailPreview,
     EscalationList,
     FeedbackRequest,
     FeedbackResponse,
     FeedbackSummary,
     HealthResponse,
+    OrderSummary,
+    OverviewResponse,
+    PolicySummary,
+    ProductSummary,
 )
 
 log = logging.getLogger("fte")
@@ -506,6 +512,83 @@ async def list_escalations(
         tenant.business_id, status=status_filter
     )
     return EscalationList(escalations=[to_public_card(r) for r in records])
+
+
+@app.get("/dashboard/overview", response_model=OverviewResponse)
+async def operations_overview(
+    tenant: TenantContext = Depends(require_operator),
+) -> OverviewResponse:
+    """Records, stock, policies and recent activity — the seller's own lens."""
+    orders = await tenant.store.list_orders(tenant.business_id, limit=25)
+    products = await tenant.store.list_products(tenant.business_id)
+    policies = await tenant.store.list_policies(tenant.business_id)
+    activity = await tenant.store.recent_audit(tenant.business_id, limit=20)
+
+    return OverviewResponse(
+        orders=[
+            OrderSummary(
+                order_id=o.order_id,
+                customer_name=o.customer_name,
+                status=o.status,
+                placed_at=o.placed_at,
+                eta=o.eta,
+                item_count=o.item_count,
+                total=o.total,
+            )
+            for o in orders
+        ],
+        products=[
+            ProductSummary(
+                product_id=p.product_id,
+                name=p.name,
+                price=p.price,
+                stock=p.stock,
+                in_stock=p.in_stock,
+                summary=p.summary,
+            )
+            for p in products
+        ],
+        policies=[
+            PolicySummary(doc=p.doc, topic=p.topic, source_ref=p.source_ref)
+            for p in policies
+        ],
+        recent_activity=[
+            ActivityEntry(
+                actor=e.actor,
+                action=e.action,
+                target=e.target,
+                outcome=e.outcome,
+                ts=e.ts.isoformat(),
+            )
+            for e in activity
+        ],
+        counts={
+            "orders": len(orders),
+            "products": len(products),
+            "policies": len(policies),
+            "out_of_stock": sum(1 for p in products if not p.in_stock),
+        },
+    )
+
+
+@app.get("/dashboard/emails/{session_id}", response_model=EmailPreview)
+async def email_preview(
+    session_id: str,
+    tenant: TenantContext = Depends(require_operator),
+) -> EmailPreview:
+    """The summary email sent for a conversation, exactly as it was rendered."""
+    record = await tenant.store.get_email_for_session(tenant.business_id, session_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404, detail="No summary email was sent for that conversation."
+        )
+    return EmailPreview(
+        subject=record.subject,
+        body_html=record.body_html,
+        recipient=record.recipient,
+        status=record.status,
+        feedback_token=record.feedback_token,
+    )
 
 
 @app.post("/escalations/{escalation_id}/decision", response_model=DecisionResponse)

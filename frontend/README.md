@@ -37,6 +37,7 @@ it. Flip the toggle to **Seller** and the Decision Card is already waiting.
 | `/pricing` | static | Core vs Pro comparison |
 | `/login` | client | Role gateway into the demo |
 | `/dashboard` | client, gated | The dual customer/seller dashboard |
+| `/demo` | client | The guided playground — the ten-step tour |
 
 ## Layout
 
@@ -52,6 +53,9 @@ components/
   SellerView.tsx        escalation queue + CSAT, polled
   DecisionCardView.tsx  the one-click approve/decline card
   SiteChrome.tsx        marketing header/footer (server components)
+  demo/steps.ts         the ten steps, their copy and what each one does
+  demo/OpsPeek.tsx      step 9 — records, stock, policies, audit log
+  demo/EmailPreviewPanel.tsx  step 8 — the real summary email, sandboxed
   ui/primitives.tsx     Button, Card, Badge, Input, Skeleton, Empty, Error
 lib/
   api.ts            the single door to the backend
@@ -74,7 +78,12 @@ lib/
 
 ## Verified
 
-- `npm run build` — clean, all six routes prerendered, TypeScript passes.
+- `npm run build` — clean, all seven routes prerendered, TypeScript passes.
+- **The demo tour's exact API sequence replayed against the live backend**: all
+  ten steps produce their expected outcome, including the identity gate
+  withholding data, the small refund executing, the large one pausing, approval
+  resuming the original run, and the summary email rendering with its feedback
+  link.
 - `npx eslint .` — no errors.
 - Every route serves 200 from `next start`, with correct `<title>` and
   description in the server-rendered HTML.
@@ -99,4 +108,6 @@ to endpoints that answer correctly.
   would need a products endpoint on the backend rather than invented detail.
 - **No streaming.** `POST /chat` is request/response today; the typing indicator
   is honest about waiting rather than faking token-by-token output.
-- **The demo playground (`/demo`) is Phase 7**, as is the guided step flow.
+- **The demo holds both demo tokens.** Seeing both sides in one tab is the
+  point of the tour, and signing in and out halfway through would break it. They
+  are the public seed-data tokens; the backend still authenticates every call.

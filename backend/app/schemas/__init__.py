@@ -190,6 +190,69 @@ class FeedbackSummary(BaseModel):
     ratings: dict[str, int]
 
 
+# --- HTTP contract: the operations overview -----------------------------------
+#
+# The seller's own view of their store. Operator-only, and never reachable by a
+# tool — so unlike everything the model sees, these are not scoped for token
+# cost. They are still scoped for PII: customer email is omitted, because the
+# operator screens that exist today have no use for it.
+
+
+class OrderSummary(BaseModel):
+    order_id: str
+    customer_name: str
+    status: str
+    placed_at: str
+    eta: str | None = None
+    item_count: int
+    total: str
+
+
+class ProductSummary(BaseModel):
+    product_id: str
+    name: str
+    price: str
+    stock: int
+    in_stock: bool
+    summary: str
+
+
+class PolicySummary(BaseModel):
+    doc: str
+    topic: str
+    source_ref: str
+
+
+class ActivityEntry(BaseModel):
+    actor: str
+    action: str
+    target: str
+    outcome: str
+    ts: str
+
+
+class OverviewResponse(BaseModel):
+    orders: list[OrderSummary]
+    products: list[ProductSummary]
+    policies: list[PolicySummary]
+    recent_activity: list[ActivityEntry]
+    counts: dict[str, int]
+
+
+class EmailPreview(BaseModel):
+    """A summary email as it was actually rendered and stored.
+
+    Serves the demo's "here is what the customer receives" step with the real
+    message rather than a mock-up of one.
+    """
+
+    subject: str
+    body_html: str
+    recipient: str
+    status: str
+    feedback_token: str
+
+
 # --- HTTP contract: the operator queue ----------------------------------------
 
 

@@ -186,6 +186,17 @@ class Store(ABC):
     # signatures are the seam it swaps behind.
 
     @abstractmethod
+    async def list_orders(
+        self, business_id: str, limit: int = 50
+    ) -> list[OrderRecord]:
+        """All orders for a tenant, newest first.
+
+        For the operator's own view of their store. Note this returns full
+        records including customer email — it is reached only by an operator
+        endpoint, never by a tool, so nothing here is exposed to the model.
+        """
+
+    @abstractmethod
     async def list_products(self, business_id: str) -> list[ProductRecord]: ...
 
     @abstractmethod

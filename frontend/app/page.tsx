@@ -37,7 +37,7 @@ export default function HomePage() {
             </p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Link
-                href="/login"
+                href="/demo"
                 className="inline-flex h-12 items-center gap-2 rounded-xl bg-accent px-6 text-[15px] font-medium text-white transition hover:bg-accent-soft"
               >
                 Try the demo <ArrowRight size={16} />
@@ -166,7 +166,7 @@ export default function HomePage() {
                 See pricing <ArrowRight size={15} />
               </Link>
               <Link
-                href="/login"
+                href="/demo"
                 className="inline-flex h-11 items-center rounded-xl border border-line px-5 text-sm text-body transition hover:border-accent/50"
               >
                 Try the demo
