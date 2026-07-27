@@ -778,6 +778,42 @@ class TestSessionPersistence:
         await mine.clear_session()
 
 
+@pytest.fixture
+async def scratch_key(pg):
+    """Mints keys and deletes them afterwards.
+
+    Added after these tests left rows in a shared database that then showed up
+    in the seller's live integrations page — a key labelled "Storefront" locked
+    to aeron.example.com, which looked exactly like the UI had invented one.
+
+    The store has no delete method and should not: revoking is right for a real
+    key, because an audit entry naming it has to stay resolvable. A test tidying
+    up after itself is a different thing, so it goes around the contract here
+    rather than adding a destructive method nothing in production wants.
+    """
+    made: list[str] = []
+
+    async def mint(**kwargs) -> "SiteKeyRecord":
+        import uuid
+
+        from app.db.base import SiteKeyRecord
+
+        record = SiteKeyRecord(
+            key=f"pk_{uuid.uuid4().hex}", business_id="biz_demo", **kwargs
+        )
+        await pg.create_site_key(record)
+        made.append(record.key)
+        return record
+
+    yield mint
+
+    if made:
+        async with pg.pool.acquire() as conn:
+            await conn.execute(
+                "delete from fte.site_keys where key = any($1::text[])", made
+            )
+
+
 class TestSiteKeysOnPostgres:
     """The public credential, against the real database.
 
@@ -787,21 +823,11 @@ class TestSiteKeysOnPostgres:
     match on substrings instead of whole origins.
     """
 
-    async def test_a_key_round_trips_with_its_origins_intact(self, pg):
-        import uuid
-
-        from app.db.base import SiteKeyRecord
-
-        key = f"pk_{uuid.uuid4().hex}"
-        await pg.create_site_key(
-            SiteKeyRecord(
-                key=key,
-                business_id="biz_demo",
-                label="Storefront",
-                allowed_origins=["https://aeron.example.com"],
-            )
+    async def test_a_key_round_trips_with_its_origins_intact(self, pg, scratch_key):
+        record = await scratch_key(
+            label="Storefront", allowed_origins=["https://aeron.example.com"]
         )
-        found = await pg.get_site_key(key)
+        found = await pg.get_site_key(record.key)
         assert found is not None
         assert found.business_id == "biz_demo"
         assert found.allowed_origins == ["https://aeron.example.com"]
@@ -809,60 +835,35 @@ class TestSiteKeysOnPostgres:
         assert found.permits("https://aeron.example.com")
         assert not found.permits("https://evil.example")
 
-    async def test_revoking_is_tenant_scoped(self, pg):
+    async def test_revoking_is_tenant_scoped(self, pg, scratch_key):
         """Another tenant guessing the key must not be able to revoke it."""
-        import uuid
+        record = await scratch_key(allowed_origins=["https://aeron.example.com"])
 
-        from app.db.base import SiteKeyRecord
+        assert await pg.revoke_site_key("biz_other", record.key) is False
+        assert (await pg.get_site_key(record.key)).active is True
 
-        key = f"pk_{uuid.uuid4().hex}"
-        await pg.create_site_key(
-            SiteKeyRecord(
-                key=key,
-                business_id="biz_demo",
-                allowed_origins=["https://aeron.example.com"],
-            )
-        )
-        assert await pg.revoke_site_key("biz_other", key) is False
-        assert (await pg.get_site_key(key)).active is True
-
-        assert await pg.revoke_site_key("biz_demo", key) is True
-        revoked = await pg.get_site_key(key)
+        assert await pg.revoke_site_key("biz_demo", record.key) is True
+        revoked = await pg.get_site_key(record.key)
         assert revoked.active is False
         assert revoked.permits("https://aeron.example.com") is False
 
-    async def test_revoking_twice_reports_no_change(self, pg):
-        import uuid
+    async def test_revoking_twice_reports_no_change(self, pg, scratch_key):
+        record = await scratch_key(preview=True)
+        assert await pg.revoke_site_key("biz_demo", record.key) is True
+        assert await pg.revoke_site_key("biz_demo", record.key) is False
 
-        from app.db.base import SiteKeyRecord
-
-        key = f"pk_{uuid.uuid4().hex}"
-        await pg.create_site_key(
-            SiteKeyRecord(key=key, business_id="biz_demo", preview=True)
-        )
-        assert await pg.revoke_site_key("biz_demo", key) is True
-        assert await pg.revoke_site_key("biz_demo", key) is False
-
-    async def test_keys_are_listed_per_tenant(self, pg):
-        import uuid
-
-        from app.db.base import SiteKeyRecord
-
-        marker = f"pk_{uuid.uuid4().hex}"
-        await pg.create_site_key(
-            SiteKeyRecord(key=marker, business_id="biz_other", preview=True)
-        )
+    async def test_keys_are_listed_per_tenant(self, pg, scratch_key):
+        record = await scratch_key(preview=True)
+        # Moved to the other tenant after minting, so the fixture still cleans it.
+        async with pg.pool.acquire() as conn:
+            await conn.execute(
+                "update fte.site_keys set business_id = 'biz_other' where key = $1",
+                record.key,
+            )
         keys = [k.key for k in await pg.list_site_keys("biz_demo")]
-        assert marker not in keys
+        assert record.key not in keys
 
-    async def test_a_preview_key_permits_any_origin(self, pg):
-        import uuid
-
-        from app.db.base import SiteKeyRecord
-
-        key = f"pk_{uuid.uuid4().hex}"
-        await pg.create_site_key(
-            SiteKeyRecord(key=key, business_id="biz_demo", preview=True)
-        )
-        found = await pg.get_site_key(key)
+    async def test_a_preview_key_permits_any_origin(self, pg, scratch_key):
+        record = await scratch_key(preview=True)
+        found = await pg.get_site_key(record.key)
         assert found.permits("https://anywhere.example")

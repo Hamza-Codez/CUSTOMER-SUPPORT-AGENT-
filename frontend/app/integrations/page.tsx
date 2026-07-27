@@ -98,7 +98,7 @@ export default function IntegrationsPage() {
 
         <section className="border-t border-line bg-surface/30 px-5 py-14">
           <div className="mx-auto max-w-5xl">
-            <div className="grid gap-12 lg:grid-cols-[1.1fr_1fr] lg:items-center">
+            <div className="grid gap-12 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-center">
               <div>
                 <h2 className="text-heading text-fg">Connect your real orders</h2>
                 <p className="mb-7 mt-2.5 text-[14px] leading-relaxed text-muted">
@@ -190,8 +190,8 @@ function WidgetMethod() {
   const live = (keys ?? []).filter((k) => k.active && !k.preview);
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-      <div>
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+      <div className="min-w-0">
         <h2 className="mb-2 text-heading text-fg">One script tag</h2>
         <p className="mb-4 text-[13.5px] leading-relaxed text-muted">
           Paste it before the closing{" "}
@@ -223,17 +223,22 @@ function WidgetMethod() {
         ) : (
           <>
             {live.length > 0 ? (
-              <div className="flex flex-col gap-4">
+              <div className="flex min-w-0 flex-col gap-4">
+                {/* Labelled, because an existing key appearing the moment the
+                    page loads otherwise reads as one having just been minted. */}
+                <Label>
+                  {live.length === 1 ? "Your key" : `Your keys (${live.length})`}
+                </Label>
                 {live.map((key) => (
-                  <div key={key.key}>
+                  <div key={key.key} className="min-w-0">
                     <CodeBlock code={key.snippet} />
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px] text-faint">
-                      <span>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-faint">
+                      <span className="min-w-0 break-all">
                         Locked to {key.allowed_origins.join(", ") || "no origin"}
                       </span>
                       <button
                         onClick={() => revoke(key.key)}
-                        className="ml-auto text-alert transition hover:underline"
+                        className="ml-auto shrink-0 text-alert transition hover:underline"
                       >
                         Revoke
                       </button>
@@ -330,8 +335,8 @@ function PreviewMethod() {
     : "";
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-      <div>
+    <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+      <div className="min-w-0">
         <h2 className="mb-2 text-heading text-fg">
           See it on your own site, right now
         </h2>
@@ -433,7 +438,7 @@ function ApiMethod() {
 }`;
 
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
+    <div className="grid gap-5 lg:grid-cols-2 [&>*]:min-w-0">
       <div>
         <h2 className="mb-2 text-heading text-fg">Talk to it directly</h2>
         <p className="mb-4 text-[13.5px] leading-relaxed text-muted">

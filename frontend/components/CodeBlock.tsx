@@ -34,7 +34,12 @@ export function CodeBlock({
   }
 
   return (
-    <div className={cn("panel overflow-hidden rounded-xl", className)}>
+    // `min-w-0` on the block itself, not only on whatever contains it. A snippet
+    // is one long unbreakable string — a script tag with an API key in it — and
+    // both flex and grid children default to a min-content floor, so without
+    // this the block widens its parent instead of scrolling inside it, and the
+    // whole page gains a horizontal scrollbar.
+    <div className={cn("panel min-w-0 max-w-full overflow-hidden rounded-xl", className)}>
       <div className="flex items-center gap-2 border-b border-line-soft px-3 py-1.5">
         <span className="text-label uppercase text-faint">{language}</span>
         <button
