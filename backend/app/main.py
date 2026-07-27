@@ -20,12 +20,15 @@ from agents.exceptions import (
 from agents.items import HandoffOutputItem, ToolCallOutputItem
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from app.agents.orchestrator import get_entry_agent
+from app.comms.templates import render_thanks_page
 from app.core import audit
 from app.core.auth import TenantContext, TenantDep
 from app.core.config import get_settings
 from app.db import get_store, set_store
+from app.db.base import FeedbackRecord
 from app.db.session_store import StoreSession
 from app.guardrails.input_guards import REDIRECT_MESSAGE
 from app.handoffs.human_escalation import (
@@ -41,6 +44,9 @@ from app.schemas import (
     DecisionRequest,
     DecisionResponse,
     EscalationList,
+    FeedbackRequest,
+    FeedbackResponse,
+    FeedbackSummary,
     HealthResponse,
 )
 
@@ -88,6 +94,84 @@ async def require_operator(tenant: TenantDep) -> TenantContext:
         )
     return tenant
 
+
+
+# --- feedback -----------------------------------------------------------------
+#
+# Deliberately unauthenticated. These are links in an email: the recipient has no
+# session and cannot be asked to log in. The token is the capability — unguessable,
+# single-conversation, and the record it resolves to names the tenant, so nothing
+# is trusted from the URL beyond the token itself.
+
+
+@app.get("/feedback/{token}", response_class=HTMLResponse)
+async def submit_feedback_from_email(token: str, rating: int = 0) -> HTMLResponse:
+    """One-click rating straight from a mail client."""
+    if rating < 1 or rating > 5:
+        return HTMLResponse(render_thanks_page(0, already_recorded=True), status_code=400)
+
+    store = get_store()
+    email = await store.get_email_by_token(token)
+    if email is None:
+        # Same page either way: confirming whether a token exists would let
+        # someone probe for valid ones.
+        return HTMLResponse(render_thanks_page(rating), status_code=404)
+
+    recorded = await store.record_feedback(
+        FeedbackRecord(
+            business_id=email.business_id,
+            feedback_token=token,
+            session_id=email.session_id,
+            rating=rating,
+        )
+    )
+    return HTMLResponse(render_thanks_page(rating, already_recorded=not recorded))
+
+
+@app.post("/feedback/{token}", response_model=FeedbackResponse)
+async def submit_feedback(token: str, req: FeedbackRequest) -> FeedbackResponse:
+    """Same thing with a comment, for a real form rather than a link."""
+    store = get_store()
+    email = await store.get_email_by_token(token)
+    if email is None:
+        raise HTTPException(status_code=404, detail="Unknown or expired feedback link.")
+
+    recorded = await store.record_feedback(
+        FeedbackRecord(
+            business_id=email.business_id,
+            feedback_token=token,
+            session_id=email.session_id,
+            rating=req.rating,
+            comment=req.comment,
+        )
+    )
+    return FeedbackResponse(
+        recorded=recorded,
+        rating=req.rating,
+        message=(
+            "Thanks for the feedback."
+            if recorded
+            else "A rating was already recorded for this conversation."
+        ),
+    )
+
+
+@app.get("/dashboard/feedback", response_model=FeedbackSummary)
+async def feedback_summary(
+    tenant: TenantContext = Depends(require_operator),
+) -> FeedbackSummary:
+    """CSAT for the operator dashboard."""
+    rows = await tenant.store.list_feedback(tenant.business_id, limit=500)
+    ratings = {str(n): 0 for n in range(1, 6)}
+    for row in rows:
+        ratings[str(row.rating)] += 1
+    return FeedbackSummary(
+        responses=len(rows),
+        average_rating=(
+            round(sum(r.rating for r in rows) / len(rows), 2) if rows else None
+        ),
+        ratings=ratings,
+    )
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -172,6 +256,19 @@ def _refund_action(payload: dict[str, Any]) -> AgentAction:
     return AgentAction(kind="refund_refused", label="Refund refused")
 
 
+def _email_action(payload: dict[str, Any]) -> AgentAction:
+    labels = {
+        "sent": "Summary emailed",
+        "already_sent": "Summary already sent",
+        "refused": "Summary not sent — identity unverified",
+        "failed": "Summary could not be delivered",
+    }
+    outcome = payload["outcome"]
+    return AgentAction(
+        kind=f"email_{outcome}", label=labels.get(outcome, "Summary email")
+    )
+
+
 def collect_actions(result: Any) -> list[AgentAction]:
     """Derive UI action chips from what the agent actually did.
 
@@ -213,6 +310,10 @@ def collect_actions(result: Any) -> list[AgentAction]:
                     ref=payload["escalation_id"],
                 )
             )
+        elif set(payload) <= {"outcome", "message"}:
+            # EmailResult: identified by carrying nothing the others carry. The
+            # chip never shows the address — the UI has no business displaying it.
+            actions.append(_email_action(payload))
         else:
             actions.append(_order_action(payload))
 
@@ -222,9 +323,30 @@ def collect_actions(result: Any) -> list[AgentAction]:
 # --- chat ---------------------------------------------------------------------
 
 
+async def load_verified_identity(tenant: TenantContext) -> None:
+    """Restore identities proven earlier in this conversation.
+
+    The run context is rebuilt per request, so without this a customer who proved
+    who they are in one message is an unverified stranger in the next — and the
+    refund guardrail and the mailer, which both read this evidence, would refuse
+    everything after the first turn.
+
+    Restoring it is replay of a recorded fact, not of trust: each entry was
+    written by `order_lookup` when an email actually matched, under this exact
+    `(business_id, session_id)`.
+    """
+    for record in await tenant.store.get_verifications(
+        tenant.business_id, tenant.session_id
+    ):
+        tenant.verified_orders.add(record.order_id)
+        tenant.verified_email = record.email
+        tenant.verified_name = record.name
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, tenant: TenantDep) -> ChatResponse:
     tenant.session_id = req.session_id
+    await load_verified_identity(tenant)
     session = StoreSession(
         session_id=req.session_id,
         business_id=tenant.business_id,

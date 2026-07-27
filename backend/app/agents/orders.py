@@ -7,6 +7,7 @@ from agents.models.interface import Model
 
 from app.core.auth import TenantContext
 from app.guardrails.grounding import must_be_grounded
+from app.tools.email import send_summary_email
 from app.tools.orders import order_lookup
 
 HANDOFF_DESCRIPTION = (
@@ -30,6 +31,10 @@ How you work:
   Explain kindly that the email must match the one on the order.
 - If the customer wants a refund or return for the order, hand off to the
   Refunds specialist rather than ruling on it yourself.
+- If the customer asks for a summary by email, or the conversation is clearly
+  finished after you have actually looked something up, call
+  `send_summary_email` once. You do not choose or ask for an address — it is
+  always the verified one on the order. Never read an email address aloud.
 
 Your tone: natural, warm and brief. Two or three sentences. You are a colleague
 who is genuinely helpful, not a form and not a script. Close by offering the
@@ -42,7 +47,7 @@ def build_orders_agent(model: Model, handoffs: list[Agent] | None = None) -> Age
         name="Orders",
         handoff_description=HANDOFF_DESCRIPTION,
         instructions=ORDERS_PROMPT,
-        tools=[order_lookup],
+        tools=[order_lookup, send_summary_email],
         handoffs=handoffs or [],
         output_guardrails=[must_be_grounded],
         model=model,

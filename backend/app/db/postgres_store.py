@@ -16,12 +16,15 @@ import asyncpg
 
 from app.db.base import (
     AuditEntry,
+    EmailRecord,
     EscalationRecord,
+    FeedbackRecord,
     OrderRecord,
     PolicyRecord,
     ProductRecord,
     RefundRecord,
     Store,
+    VerificationRecord,
 )
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -392,6 +395,186 @@ class PostgresStore(Store):
                 reason,
             )
         return row is not None
+
+    # --- verified identity (session-scoped) -------------------------------------
+
+    async def add_verification(self, record: VerificationRecord) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into fte.session_verifications
+                    (business_id, session_id, order_id, email, name, verified_at)
+                values ($1, $2, $3, $4, $5, $6)
+                on conflict (business_id, session_id, order_id) do update
+                    set email = excluded.email,
+                        name = excluded.name,
+                        verified_at = excluded.verified_at
+                """,
+                record.business_id,
+                record.session_id,
+                record.order_id,
+                record.email,
+                record.name,
+                record.verified_at,
+            )
+
+    async def get_verifications(
+        self, business_id: str, session_id: str
+    ) -> list[VerificationRecord]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                select business_id, session_id, order_id, email, name, verified_at
+                  from fte.session_verifications
+                 where business_id = $1 and session_id = $2
+                 order by verified_at
+                """,
+                business_id,
+                session_id,
+            )
+        return [
+            VerificationRecord(
+                business_id=r["business_id"],
+                session_id=r["session_id"],
+                order_id=r["order_id"],
+                email=r["email"],
+                name=r["name"],
+                verified_at=r["verified_at"],
+            )
+            for r in rows
+        ]
+
+    # --- email and feedback -----------------------------------------------------
+
+    _EMAIL_COLS = """
+        email_id, business_id, session_id, recipient, subject, body_html,
+        feedback_token, status, provider, error, created_at
+    """
+
+    def _email(self, row: Any) -> EmailRecord:
+        return EmailRecord(
+            email_id=row["email_id"],
+            business_id=row["business_id"],
+            session_id=row["session_id"],
+            recipient=row["recipient"],
+            subject=row["subject"],
+            body_html=row["body_html"],
+            feedback_token=row["feedback_token"],
+            status=row["status"],
+            provider=row["provider"],
+            error=row["error"],
+            created_at=row["created_at"],
+        )
+
+    async def create_email(self, record: EmailRecord) -> bool:
+        async with self.pool.acquire() as conn:
+            # The unique (business_id, session_id) turns "already emailed" into an
+            # answer rather than an exception.
+            row = await conn.fetchrow(
+                """
+                insert into fte.emails
+                    (email_id, business_id, session_id, recipient, subject,
+                     body_html, feedback_token, status, provider, error, created_at)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                on conflict (business_id, session_id) do nothing
+                returning email_id
+                """,
+                record.email_id,
+                record.business_id,
+                record.session_id,
+                record.recipient,
+                record.subject,
+                record.body_html,
+                record.feedback_token,
+                record.status,
+                record.provider,
+                record.error,
+                record.created_at,
+            )
+        return row is not None
+
+    async def update_email_status(
+        self, business_id: str, email_id: str, status: str, error: str | None = None
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                update fte.emails set status = $3, error = $4
+                 where business_id = $1 and email_id = $2
+                """,
+                business_id,
+                email_id,
+                status,
+                error,
+            )
+
+    async def get_email_by_token(self, feedback_token: str) -> EmailRecord | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"select {self._EMAIL_COLS} from fte.emails where feedback_token = $1",
+                feedback_token,
+            )
+        return self._email(row) if row else None
+
+    async def get_email_for_session(
+        self, business_id: str, session_id: str
+    ) -> EmailRecord | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                select {self._EMAIL_COLS} from fte.emails
+                 where business_id = $1 and session_id = $2
+                """,
+                business_id,
+                session_id,
+            )
+        return self._email(row) if row else None
+
+    async def record_feedback(self, record: FeedbackRecord) -> bool:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                insert into fte.feedback
+                    (business_id, feedback_token, session_id, rating, comment, created_at)
+                values ($1, $2, $3, $4, $5, $6)
+                on conflict (feedback_token) do nothing
+                returning id
+                """,
+                record.business_id,
+                record.feedback_token,
+                record.session_id,
+                record.rating,
+                record.comment,
+                record.created_at,
+            )
+        return row is not None
+
+    async def list_feedback(
+        self, business_id: str, limit: int = 50
+    ) -> list[FeedbackRecord]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                select business_id, feedback_token, session_id, rating, comment, created_at
+                  from fte.feedback
+                 where business_id = $1
+                 order by created_at desc, id desc
+                 limit $2
+                """,
+                business_id,
+                limit,
+            )
+        return [
+            FeedbackRecord(
+                business_id=r["business_id"],
+                feedback_token=r["feedback_token"],
+                session_id=r["session_id"],
+                rating=r["rating"],
+                comment=r["comment"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
 
     # --- audit ----------------------------------------------------------------
 

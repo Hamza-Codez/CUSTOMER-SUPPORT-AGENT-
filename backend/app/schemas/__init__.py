@@ -157,6 +157,39 @@ class EscalationResult(BaseModel):
         return _for_model(self)
 
 
+# --- Tool contract: send_summary_email ----------------------------------------
+
+
+class EmailResult(BaseModel):
+    outcome: Literal["sent", "already_sent", "refused", "failed"]
+    # Deliberately no recipient address. The agent does not choose who is emailed
+    # and has no reason to see the address, so it never enters the transcript.
+    message: str
+
+    def __str__(self) -> str:
+        return _for_model(self)
+
+
+# --- HTTP contract: feedback ---------------------------------------------------
+
+
+class FeedbackRequest(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class FeedbackResponse(BaseModel):
+    recorded: bool
+    rating: int
+    message: str
+
+
+class FeedbackSummary(BaseModel):
+    responses: int
+    average_rating: float | None
+    ratings: dict[str, int]
+
+
 # --- HTTP contract: the operator queue ----------------------------------------
 
 

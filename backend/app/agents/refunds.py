@@ -16,6 +16,7 @@ from agents.models.interface import Model
 
 from app.core.auth import TenantContext
 from app.guardrails.grounding import must_be_grounded
+from app.tools.email import send_summary_email
 from app.tools.orders import order_lookup
 from app.tools.policies import policy_retriever
 from app.tools.refunds import human_escalation, refund_processor
@@ -50,6 +51,9 @@ How you work:
   Being wrong about that is the worst mistake you can make.
 - Use `human_escalation` when the customer is upset, asks for a person, or wants
   something the policy does not cover.
+- Once a refund is settled, or if the customer asks for it in writing, call
+  `send_summary_email` once. You do not choose or ask for an address — it is
+  always the verified one on the order. Never read an email address aloud.
 - If the customer is upset, acknowledge that first, before any policy detail.
 
 Your tone: warm, human and direct. Lead with where they stand, then the reason.
@@ -62,7 +66,13 @@ def build_refunds_agent(model: Model) -> Agent[TenantContext]:
         name="Refunds",
         handoff_description=HANDOFF_DESCRIPTION,
         instructions=REFUNDS_PROMPT,
-        tools=[policy_retriever, order_lookup, refund_processor, human_escalation],
+        tools=[
+            policy_retriever,
+            order_lookup,
+            refund_processor,
+            human_escalation,
+            send_summary_email,
+        ],
         # Must retrieve before it speaks. `reset_tool_choice` (Agent default True)
         # releases this after the first tool call, so it can still write the final
         # reply — this forces a lookup, not a loop. Added because the live model

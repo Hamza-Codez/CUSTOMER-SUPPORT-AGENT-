@@ -68,6 +68,23 @@ class Settings(BaseSettings):
     # Dev-only static tokens: "<token>:<business_id>:<role>", comma separated.
     dev_tokens: str = "demo-token:biz_demo:customer,ops-token:biz_demo:operator"
 
+    # --- Email ----------------------------------------------------------------
+    # `mock` records the message in the store and sends nothing, so the whole
+    # flow — including the feedback link — is demoable and testable without an
+    # SMTP account, and no test can accidentally email a real person.
+    email_provider: Literal["mock", "smtp"] = "mock"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+    email_from: str = "Aeron Home Goods <support@example.com>"
+    # Shown in the email header. Per-business branding moves to the DB at onboarding.
+    business_display_name: str = "Aeron Home Goods"
+    # Where the one-click feedback links point. The API serves them directly, so
+    # a rating works straight from an email client with no frontend involved.
+    public_base_url: str = "http://localhost:8000"
+
     # Money-moving limits, enforced in code by the refund tool guardrail — never
     # by the prompt. Above the cap, or outside the window, the run pauses for a
     # human instead of executing.

@@ -99,6 +99,53 @@ class EscalationRecord:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass(frozen=True)
+class VerificationRecord:
+    """An identity proven during a conversation, remembered for its duration.
+
+    Verification has to outlive a single turn. A customer who proves who they are
+    and then asks a follow-up question is still the same person, and making them
+    re-quote their order id every message is the opposite of the experience this
+    product exists to provide (SPEC §5.3).
+
+    Scoped to `(business_id, session_id)`: it is the same key the conversation
+    itself is stored under, so nothing is remembered across tenants or across
+    conversations.
+    """
+
+    business_id: str
+    session_id: str
+    order_id: str
+    email: str
+    name: str
+    verified_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class EmailRecord:
+    email_id: str
+    business_id: str
+    session_id: str
+    recipient: str
+    subject: str
+    body_html: str
+    feedback_token: str
+    status: str  # "sent" | "recorded" | "failed"
+    provider: str
+    error: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class FeedbackRecord:
+    business_id: str
+    feedback_token: str
+    session_id: str
+    rating: int
+    comment: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 @dataclass
 class AuditEntry:
     business_id: str
@@ -203,6 +250,58 @@ class Store(ABC):
     ) -> bool:
         """Settle a pending card. Returns False if it was already resolved —
         which is what stops two operators approving the same refund."""
+
+    # --- verified identity (session-scoped) -------------------------------------
+
+    @abstractmethod
+    async def add_verification(self, record: VerificationRecord) -> None:
+        """Remember a proven identity for the rest of this conversation."""
+
+    @abstractmethod
+    async def get_verifications(
+        self, business_id: str, session_id: str
+    ) -> list[VerificationRecord]: ...
+
+    # --- email and feedback -----------------------------------------------------
+
+    @abstractmethod
+    async def create_email(self, record: EmailRecord) -> bool:
+        """Record a summary email. False if this conversation already has one.
+
+        One per conversation, enforced here rather than by the agent remembering.
+        A retried run or a second wrap-up cannot email a customer twice.
+        """
+
+    @abstractmethod
+    async def update_email_status(
+        self, business_id: str, email_id: str, status: str, error: str | None = None
+    ) -> None:
+        """Record what delivery actually did.
+
+        The row is claimed *before* sending, so the idempotency key is held before
+        anything leaves the building; this writes the outcome afterwards. Without
+        it every email would sit at 'pending' forever and a silent delivery
+        failure would look identical to a success.
+        """
+
+    @abstractmethod
+    async def get_email_by_token(self, feedback_token: str) -> EmailRecord | None:
+        """Look up by token alone — the feedback link carries no session and no
+        tenant. The token is the capability; the record it finds names the tenant."""
+
+    @abstractmethod
+    async def get_email_for_session(
+        self, business_id: str, session_id: str
+    ) -> EmailRecord | None: ...
+
+    @abstractmethod
+    async def record_feedback(self, record: FeedbackRecord) -> bool:
+        """Store a rating. False if this token already has one."""
+
+    @abstractmethod
+    async def list_feedback(
+        self, business_id: str, limit: int = 50
+    ) -> list[FeedbackRecord]: ...
 
     # --- audit ----------------------------------------------------------------
 

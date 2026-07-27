@@ -13,12 +13,15 @@ from typing import Any
 
 from app.db.base import (
     AuditEntry,
+    EmailRecord,
     EscalationRecord,
+    FeedbackRecord,
     OrderRecord,
     PolicyRecord,
     ProductRecord,
     RefundRecord,
     Store,
+    VerificationRecord,
 )
 from app.rag.parser import parse_directory
 
@@ -253,6 +256,9 @@ class MockStore(Store):
         self._policy_vectors: dict[str, list[float]] = {}
         self._refunds: dict[tuple[str, str], RefundRecord] = {}
         self._escalations: dict[tuple[str, str], EscalationRecord] = {}
+        self._emails: dict[tuple[str, str], EmailRecord] = {}
+        self._feedback: dict[str, FeedbackRecord] = {}
+        self._verifications: dict[tuple[str, str, str], VerificationRecord] = {}
 
     async def connect(self) -> None:
         return None
@@ -374,6 +380,59 @@ class MockStore(Store):
         record.resolved_by = resolved_by
         record.resolution_reason = reason
         return True
+
+    async def add_verification(self, record: VerificationRecord) -> None:
+        key = (record.business_id, record.session_id, record.order_id)
+        self._verifications[key] = record
+
+    async def get_verifications(
+        self, business_id: str, session_id: str
+    ) -> list[VerificationRecord]:
+        return [
+            v
+            for (biz, sess, _), v in self._verifications.items()
+            if biz == business_id and sess == session_id
+        ]
+
+    async def create_email(self, record: EmailRecord) -> bool:
+        key = (record.business_id, record.session_id)
+        if key in self._emails:
+            return False
+        self._emails[key] = record
+        return True
+
+    async def update_email_status(
+        self, business_id: str, email_id: str, status: str, error: str | None = None
+    ) -> None:
+        for record in self._emails.values():
+            if record.business_id == business_id and record.email_id == email_id:
+                record.status = status
+                record.error = error
+                return
+
+    async def get_email_by_token(self, feedback_token: str) -> EmailRecord | None:
+        for record in self._emails.values():
+            if record.feedback_token == feedback_token:
+                return record
+        return None
+
+    async def get_email_for_session(
+        self, business_id: str, session_id: str
+    ) -> EmailRecord | None:
+        return self._emails.get((business_id, session_id))
+
+    async def record_feedback(self, record: FeedbackRecord) -> bool:
+        if record.feedback_token in self._feedback:
+            return False
+        self._feedback[record.feedback_token] = record
+        return True
+
+    async def list_feedback(
+        self, business_id: str, limit: int = 50
+    ) -> list[FeedbackRecord]:
+        rows = [f for f in self._feedback.values() if f.business_id == business_id]
+        rows.sort(key=lambda f: f.created_at, reverse=True)
+        return rows[:limit]
 
     async def write_audit(self, entry: AuditEntry) -> None:
         self._audit.append(entry)

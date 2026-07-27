@@ -509,6 +509,161 @@ async def _clean_refund(pg, order_id: str):
             )
 
 
+class TestCommsOnPostgres:
+    async def test_one_summary_per_conversation_is_enforced_by_the_database(self, pg):
+        import uuid
+
+        from app.db.base import EmailRecord
+
+        session_id = f"pg-email-{uuid.uuid4().hex[:6]}"
+
+        def build() -> EmailRecord:
+            return EmailRecord(
+                email_id=f"eml_{uuid.uuid4().hex[:10]}",
+                business_id="biz_demo",
+                session_id=session_id,
+                recipient="ayesha.k@example.com",
+                subject="Your conversation",
+                body_html="<p>hi</p>",
+                feedback_token=uuid.uuid4().hex,
+                status="pending",
+                provider="mock",
+            )
+
+        first = build()
+        assert await pg.create_email(first) is True
+        assert await pg.create_email(build()) is False
+
+        stored = await pg.get_email_for_session("biz_demo", session_id)
+        assert stored.email_id == first.email_id
+
+    async def test_delivery_status_round_trips(self, pg):
+        import uuid
+
+        from app.db.base import EmailRecord
+
+        session_id = f"pg-status-{uuid.uuid4().hex[:6]}"
+        record = EmailRecord(
+            email_id=f"eml_{uuid.uuid4().hex[:10]}",
+            business_id="biz_demo",
+            session_id=session_id,
+            recipient="a@example.com",
+            subject="s",
+            body_html="<p>x</p>",
+            feedback_token=uuid.uuid4().hex,
+            status="pending",
+            provider="smtp",
+        )
+        await pg.create_email(record)
+        await pg.update_email_status("biz_demo", record.email_id, "failed", "boom")
+
+        stored = await pg.get_email_for_session("biz_demo", session_id)
+        assert stored.status == "failed"
+        assert stored.error == "boom"
+
+    async def test_one_rating_per_token(self, pg):
+        import uuid
+
+        from app.db.base import EmailRecord, FeedbackRecord
+
+        token = uuid.uuid4().hex
+        session_id = f"pg-fb-{uuid.uuid4().hex[:6]}"
+        await pg.create_email(
+            EmailRecord(
+                email_id=f"eml_{uuid.uuid4().hex[:10]}",
+                business_id="biz_demo",
+                session_id=session_id,
+                recipient="a@example.com",
+                subject="s",
+                body_html="<p>x</p>",
+                feedback_token=token,
+                status="recorded",
+                provider="mock",
+            )
+        )
+
+        def feedback(rating: int) -> FeedbackRecord:
+            return FeedbackRecord(
+                business_id="biz_demo",
+                feedback_token=token,
+                session_id=session_id,
+                rating=rating,
+            )
+
+        assert await pg.record_feedback(feedback(5)) is True
+        assert await pg.record_feedback(feedback(1)) is False
+
+        rows = [f for f in await pg.list_feedback("biz_demo", limit=500)
+                if f.feedback_token == token]
+        assert [f.rating for f in rows] == [5]
+
+    async def test_a_token_resolves_to_its_tenant(self, pg):
+        """The feedback link carries no tenant; the record it finds names one."""
+        import uuid
+
+        from app.db.base import EmailRecord
+
+        token = uuid.uuid4().hex
+        await pg.create_email(
+            EmailRecord(
+                email_id=f"eml_{uuid.uuid4().hex[:10]}",
+                business_id="biz_demo",
+                session_id=f"pg-tok-{uuid.uuid4().hex[:6]}",
+                recipient="a@example.com",
+                subject="s",
+                body_html="<p>x</p>",
+                feedback_token=token,
+                status="recorded",
+                provider="mock",
+            )
+        )
+        found = await pg.get_email_by_token(token)
+        assert found is not None
+        assert found.business_id == "biz_demo"
+        assert await pg.get_email_by_token("not-a-token") is None
+
+
+class TestSessionVerificationOnPostgres:
+    async def test_a_verification_survives_and_is_scoped(self, pg):
+        import uuid
+
+        from app.db.base import VerificationRecord
+
+        session_id = f"pg-ver-{uuid.uuid4().hex[:6]}"
+        await pg.add_verification(
+            VerificationRecord(
+                business_id="biz_demo",
+                session_id=session_id,
+                order_id="ORD-1002",
+                email="ayesha.k@example.com",
+                name="Ayesha K.",
+            )
+        )
+        records = await pg.get_verifications("biz_demo", session_id)
+        assert [r.order_id for r in records] == ["ORD-1002"]
+
+        assert await pg.get_verifications("biz_other", session_id) == []
+        assert await pg.get_verifications("biz_demo", "different-session") == []
+
+    async def test_re_verifying_the_same_order_does_not_duplicate(self, pg):
+        import uuid
+
+        from app.db.base import VerificationRecord
+
+        session_id = f"pg-ver2-{uuid.uuid4().hex[:6]}"
+        for _ in range(3):
+            await pg.add_verification(
+                VerificationRecord(
+                    business_id="biz_demo",
+                    session_id=session_id,
+                    order_id="ORD-1002",
+                    email="ayesha.k@example.com",
+                    name="Ayesha K.",
+                )
+            )
+        assert len(await pg.get_verifications("biz_demo", session_id)) == 1
+
+
 class TestSessionPersistence:
     async def test_round_trip_and_ordering(self, pg):
         s = StoreSession("pg-session-test", "biz_demo", pg)

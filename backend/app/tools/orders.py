@@ -17,6 +17,7 @@ from agents import RunContextWrapper, function_tool
 
 from app.core import audit
 from app.core.auth import TenantContext
+from app.db.base import VerificationRecord
 from app.schemas import OrderLookupResult, OrderStatus
 
 _ORDER_ID_RE = re.compile(r"^ORD-?(\d+)$", re.IGNORECASE)
@@ -83,6 +84,23 @@ async def order_lookup(
     # Identity proven for this order, in this run. `refund_processor` may only
     # touch orders that appear here — the model cannot assert its way onto the list.
     tenant.note_verified(normalised)
+    # The proven address, kept out of the tool's return value but available to the
+    # mailer. The customer's own email is the only address we will ever send to.
+    tenant.verified_email = record.customer_email
+    tenant.verified_name = record.customer_name
+
+    # Remembered for the rest of the conversation. Without this, verification
+    # dies with the turn and a customer who has just proved who they are is a
+    # stranger again by their next message.
+    await tenant.store.add_verification(
+        VerificationRecord(
+            business_id=tenant.business_id,
+            session_id=tenant.session_id,
+            order_id=normalised,
+            email=record.customer_email,
+            name=record.customer_name,
+        )
+    )
 
     await audit.record(
         tenant,

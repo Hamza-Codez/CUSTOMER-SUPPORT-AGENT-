@@ -168,6 +168,63 @@ create table if not exists fte.audit_logs (
 
 create index if not exists audit_logs_biz_ts_idx on fte.audit_logs (business_id, ts desc);
 
+-- Identities proven during a conversation. Verification has to outlive a single
+-- turn: a customer who proved who they are and then asks a follow-up is still
+-- the same person, and re-asking every message defeats the point (SPEC §5.3).
+-- Keyed the same way the conversation is, so nothing carries across tenants or
+-- across conversations.
+create table if not exists fte.session_verifications (
+    id          bigserial primary key,
+    business_id text        not null references fte.businesses (id) on delete cascade,
+    session_id  text        not null,
+    order_id    text        not null,
+    email       text        not null,
+    name        text        not null default '',
+    verified_at timestamptz not null default now(),
+    unique (business_id, session_id, order_id)
+);
+
+create index if not exists session_verifications_idx
+    on fte.session_verifications (business_id, session_id);
+
+-- Summary emails. The unique constraint on (business_id, session_id) is the
+-- idempotency key: one summary per conversation, enforced by the database rather
+-- than by the agent remembering whether it already sent one.
+--
+-- `feedback_token` is the capability in the emailed link. It is unguessable and
+-- scoped to a single conversation, which is what lets the feedback endpoint be
+-- unauthenticated — a recipient clicking a star in their mail client has no
+-- session and cannot be asked to log in.
+create table if not exists fte.emails (
+    id             bigserial primary key,
+    email_id       text        not null unique,
+    business_id    text        not null references fte.businesses (id) on delete cascade,
+    session_id     text        not null,
+    recipient      text        not null,
+    subject        text        not null,
+    body_html      text        not null,
+    feedback_token text        not null unique,
+    status         text        not null,
+    provider       text        not null,
+    error          text,
+    created_at     timestamptz not null default now(),
+    unique (business_id, session_id)
+);
+
+-- CSAT. One response per token, so a double-click or a mail client prefetching
+-- the link cannot inflate the numbers.
+create table if not exists fte.feedback (
+    id             bigserial primary key,
+    business_id    text        not null references fte.businesses (id) on delete cascade,
+    feedback_token text        not null unique references fte.emails (feedback_token) on delete cascade,
+    session_id     text        not null,
+    rating         int         not null check (rating between 1 and 5),
+    comment        text,
+    created_at     timestamptz not null default now()
+);
+
+create index if not exists feedback_biz_idx on fte.feedback (business_id, created_at desc);
+
 -- --------------------------------------------------------------------------
 -- Additive migrations
 --

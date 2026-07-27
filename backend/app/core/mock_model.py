@@ -44,6 +44,11 @@ ROUTING = [
 
 REFUND_WORDS = ("refund", "money back", "reimburse", "send it back", "return this")
 
+SUMMARY_WORDS = (
+    "email me", "send me a summary", "summary by email", "in writing",
+    "email a summary", "confirmation email", "send a summary",
+)
+
 POLICY_WORDS = (
     "refund", "return", "policy", "warranty", "dispatch", "shipping",
     "delivery", "how long", "guarantee", "money back",
@@ -199,6 +204,26 @@ def _phrase_refund(payload: dict[str, Any]) -> str:
     )
 
 
+def _phrase_email(payload: dict[str, Any]) -> str:
+    outcome = payload.get("outcome")
+    if outcome == "sent":
+        return (
+            "I've emailed you a summary of everything we covered, along with a "
+            "quick one-tap rating if you have a moment. Anything else I can help with?"
+        )
+    if outcome == "already_sent":
+        return "That summary is already on its way to you — check your inbox shortly."
+    if outcome == "refused":
+        return (
+            "Before I can email a summary I need to confirm who I'm speaking to. "
+            "Could you give me your order number and the email on the order?"
+        )
+    return (
+        "I couldn't get that summary email out just now, but everything we "
+        "discussed still stands."
+    )
+
+
 def _kind_of(payload: dict[str, Any]) -> str:
     """Which tool produced this. The result schemas are disjoint by construction."""
     if "products" in payload:
@@ -209,6 +234,10 @@ def _kind_of(payload: dict[str, Any]) -> str:
         return "refund"
     if "escalation_id" in payload:
         return "escalation"
+    # EmailResult carries only outcome+message, so it is identified by what the
+    # others have and it does not.
+    if set(payload) <= {"outcome", "message"}:
+        return "email"
     return "order"
 
 
@@ -220,6 +249,8 @@ def _phrase(payload: dict[str, Any]) -> str:
         return _phrase_policy(payload)
     if kind == "refund":
         return _phrase_refund(payload)
+    if kind == "email":
+        return _phrase_email(payload)
     if kind == "escalation":
         return (
             "I've passed this to a colleague who can help properly. "
@@ -255,10 +286,20 @@ class MockModel(Model):
         # 1. Everything the tools have already returned this turn, by kind.
         #    Handoff outputs carry no `outcome`, so they are skipped here and fall
         #    through to routing below, which is what should happen.
+        # Only this turn's tool results count. `items` carries the whole session,
+        # so scanning all of it made turn two act on turn one's lookup — the agent
+        # re-reported an order when it had just sent an email. Everything after
+        # the last user message is what happened since they spoke.
+        last_user = max(
+            (i for i, item in enumerate(items) if item.get("role") == "user"),
+            default=-1,
+        )
+        this_turn = items[last_user + 1 :]
+
         seen: dict[str, dict[str, Any]] = {}
         attempted: set[str] = set()
         rejections: list[str] = []
-        for item in items:
+        for item in this_turn:
             if item.get("type") == "function_call":
                 attempted.add(str(item.get("name") or ""))
                 continue
@@ -286,6 +327,22 @@ class MockModel(Model):
         available = {getattr(t, "name", "") for t in tools}
         wants_refund = any(w in lowered for w in REFUND_WORDS)
 
+        # 2b. An explicit request for a written summary. Checked before the other
+        #     tools so "email me a summary of my order" does not read as a lookup.
+        if (
+            "send_summary_email" in available
+            and any(w in lowered for w in SUMMARY_WORDS)
+            and "email" not in seen
+        ):
+            if "send_summary_email" in attempted:
+                return self._say(
+                    "That summary is already on its way to you — check your inbox."
+                )
+            return self._tool(
+                "send_summary_email",
+                {"summary": "Here's a recap of what we sorted out together."},
+            )
+
         # 3. Refund flow: check policy, verify identity, then attempt the refund.
         #    Sequenced deliberately — refund_processor's guardrail refuses unless
         #    order_lookup has already verified this order in this run.
@@ -304,7 +361,7 @@ class MockModel(Model):
                 return step
 
         # 4. A terminal tool result -> phrase it.
-        for kind in ("refund", "escalation", "products", "policy", "order"):
+        for kind in ("refund", "escalation", "email", "products", "policy", "order"):
             if kind in seen:
                 return self._say(_phrase(seen[kind]))
 

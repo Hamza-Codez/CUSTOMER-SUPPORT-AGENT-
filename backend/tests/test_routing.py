@@ -114,6 +114,7 @@ class TestSpecialistsRunTheirTools:
             "order_lookup",
             "refund_processor",
             "human_escalation",
+            "send_summary_email",
         }
 
         refund_tool = next(t for t in refunds.tools if t.name == "refund_processor")
