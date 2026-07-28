@@ -176,6 +176,9 @@ _TEMPLATE = r"""
   var input = null;
   var sendBtn = null;
   var busy = false;
+  /* True once the customer has actually said something. Guards the opening
+     rows from being redrawn over a live conversation. */
+  var exchanged = false;
 
   function text(el, value) {
     el.appendChild(document.createTextNode(value));
@@ -318,6 +321,7 @@ _TEMPLATE = r"""
   function send(value) {
     if (busy || !value) return;
     busy = true;
+    exchanged = true;
     sendBtn.disabled = true;
     bubble("me", value);
     input.value = "";
@@ -416,10 +420,19 @@ _TEMPLATE = r"""
     panel.appendChild(by);
     root.appendChild(panel);
 
-    /* One call establishes the whole opening: whose store this is, who is
-       standing here, and what they own. The greeting waits for it — opening
-       with "what is your order number?" and *then* discovering we already knew
-       is worse than a half-second pause. */
+    openSession();
+  }
+
+  /* One call establishes the whole opening: whose store this is, who is
+     standing here, and what they own. The greeting waits for it — opening with
+     "what is your order number?" and *then* discovering we already knew is
+     worse than a half-second pause.
+
+     Re-run every time the panel is opened, because a single-page storefront
+     changes underneath a widget that never reloads: navigate from Orders to a
+     product, add something to the basket, reopen, and rows fetched once at
+     first open would be describing a page the customer has left. */
+  function openSession() {
     fetch(API + "/widget/session", { headers: identity() })
       .then(function (r) {
         return r.ok ? r.json() : null;
@@ -431,6 +444,12 @@ _TEMPLATE = r"""
           sub.textContent = "";
           text(sub, "Support");
         }
+        /* Only ever redrawn while the conversation is still empty. Once someone
+           has actually asked something, dropping a fresh block of order rows
+           under their reply would read as the widget losing its place. */
+        if (exchanged) return;
+        log.textContent = "";
+
         if (data && (data.customer_name || (data.orders || []).length)) {
           var who = data.customer_name
             ? "Hi " + String(data.customer_name).split(" ")[0] + " — "
@@ -448,15 +467,18 @@ _TEMPLATE = r"""
       .catch(function () {
         /* The session is an accelerator, not a prerequisite. A store that cannot
            identify its visitor still has a working assistant. */
-        send("hi");
+        if (!exchanged) send("hi");
       });
   }
 
   function toggle() {
     if (!panel) {
       build();
+    } else if (panel.style.display === "none") {
+      panel.style.display = "flex";
+      openSession();
     } else {
-      panel.style.display = panel.style.display === "none" ? "flex" : "none";
+      panel.style.display = "none";
     }
     if (input) input.focus();
   }

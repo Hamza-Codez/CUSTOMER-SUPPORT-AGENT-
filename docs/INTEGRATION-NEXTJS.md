@@ -183,22 +183,70 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 injects the tag, which makes `document.currentScript` null; the widget falls back
 to scanning for `data-fte-key`, so it still finds its key.
 
-### No backend? Declared mode
+### No server-side auth? Declared mode, on every page
 
-Skip step 3 and publish the context unsigned:
+If the app has no server session, step 3 is impossible — you cannot sign an
+assertion about a customer who never logs in. Declared mode gives you the same
+rows, the same greeting and the same no-interrogation opening; the only thing it
+cannot do is execute a refund, which routes to a person instead.
+
+**Do not do this with a `<script>` tag.** A script in the layout runs once on
+first load, and an App Router navigation does not re-run it — so a widget opened
+after a few client-side transitions would be describing the page the customer
+arrived on. Use a client component instead. Copy
+[`storefront-context-provider.tsx`](./storefront-context-provider.tsx) into your
+app and mount it in the root layout:
 
 ```tsx
-<Script id="fte-context" strategy="afterInteractive">
-  {`window.fteContext = ${JSON.stringify({
-    customer: { name: "Robin" },
-    orders: [{ order_id: "JC-20260728-8VVK", status: "in_transit", total: "$666.85" }],
-    cart: [{ name: "Ceramic Kettle", qty: 1, price: "$89.00" }],
-  })};`}
-</Script>
+// app/layout.tsx
+import Script from "next/script";
+import { FteStorefrontContext } from "@/components/FteStorefrontContext";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        {children}
+
+        {/* Feed it from wherever your orders and cart already live. If they are
+            in a context/provider, read them here; if they are per-page, hoist
+            them so every route can publish them. */}
+        <FteStorefrontContext
+          customerName="Robin"
+          orders={[
+            {
+              id: "JC-20260728-8VVK",
+              status: "in_transit",
+              date: "2026-07-28",
+              total: "$666.85",
+              itemCount: 2,
+              carrier: "DHL",
+              trackingNumber: "JD0099887766",
+              eta: "2026-08-02",
+            },
+          ]}
+          cart={[{ name: "Ceramic Kettle", quantity: 1, price: "$89.00" }]}
+        />
+
+        <Script
+          src={`${process.env.NEXT_PUBLIC_FTE_API}/widget.js`}
+          data-fte-key={process.env.NEXT_PUBLIC_FTE_KEY}
+          strategy="afterInteractive"
+        />
+      </body>
+    </html>
+  );
+}
 ```
 
-Same rows, same greeting, and the agent says out loud that it is reading from the
-page. Nothing declared can be refunded.
+The widget reads `window.fteContext` at the moment it opens and again on every
+message, and re-fetches its opening rows each time the panel is reopened — so
+adding something to the basket on one page and opening the widget on another
+shows the current basket, not a stale one.
+
+If the app later grows a real session, sign the same payload on the server and
+set `window.fteSession` instead. Nothing else changes, and refunds become
+possible.
 
 ---
 
