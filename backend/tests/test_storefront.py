@@ -236,6 +236,70 @@ class TestNoInterrogation:
         assert "orders_declared" in [a["kind"] for a in body["actions"]]
 
 
+class TestTheBasket:
+    """Reported from a live storefront, as the transcript that arrived.
+
+    "what are my current orders in cart" matched no routing trigger, fell
+    through to the Support default, and came back as a quote of the store's
+    dispatch hours. The customer asked about their basket and was told what time
+    orders leave the warehouse.
+
+    Two causes: nothing possessive-but-not-"my order" routed to Orders, and the
+    basket had no tool at all — the context carried it and the widget drew it,
+    but nothing could talk about it.
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "what are my current orders in cart",
+            "what is in my basket",
+            "whats in my cart",
+        ],
+    )
+    def test_a_basket_question_is_answered_from_the_basket(
+        self, client, key, message
+    ):
+        body = client.post(
+            "/chat/public",
+            json={"message": message, "session_id": f"cart-{len(message)}"},
+            headers=declared(key),
+        ).json()
+        assert "Lumbar Cushion" in body["reply"]
+        # The failure this replaces: a dispatch-hours policy quote.
+        assert "dispatched" not in body["reply"]
+        assert "policy_cited" not in [a["kind"] for a in body["actions"]]
+
+    def test_a_basket_is_never_described_as_an_order(self, client, key):
+        body = client.post(
+            "/chat/public",
+            json={"message": "what is in my basket", "session_id": "cart-wording"},
+            headers=declared(key),
+        ).json()
+        assert "not bought" in body["reply"] or "Nothing there is bought" in body["reply"]
+
+    def test_a_basket_only_customer_is_not_an_empty_result(self, client, key):
+        """Someone browsing who has not bought yet still has a question."""
+        body = client.post(
+            "/chat/public",
+            json={"message": "what is in my basket", "session_id": "cart-only"},
+            headers=declared(key, orders=[]),
+        ).json()
+        assert "Lumbar Cushion" in body["reply"]
+
+    def test_without_a_page_it_says_so_rather_than_offering_a_menu(
+        self, client, key
+    ):
+        """The generic capability list is what something that did not listen says."""
+        body = client.post(
+            "/chat/public",
+            json={"message": "what is in my basket", "session_id": "cart-none"},
+            headers={"X-FTE-Site-Key": key["key"], "Origin": ORIGIN},
+        ).json()
+        assert "basket" in body["reply"].lower()
+        assert "I can help with orders, deliveries" not in body["reply"]
+
+
 class TestDeclaredContextCannotMoveMoney:
     """The attack the whole two-grade design exists to stop.
 

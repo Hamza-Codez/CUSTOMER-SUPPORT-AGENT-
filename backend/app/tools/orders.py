@@ -18,7 +18,13 @@ from agents import RunContextWrapper, function_tool
 from app.core import audit
 from app.core.auth import TenantContext
 from app.db.base import VerificationRecord
-from app.schemas import MyOrder, MyOrdersResult, OrderLookupResult, OrderStatus
+from app.schemas import (
+    CartLine,
+    MyOrder,
+    MyOrdersResult,
+    OrderLookupResult,
+    OrderStatus,
+)
 
 _ORDER_ID_RE = re.compile(r"^ORD-?(\d+)$", re.IGNORECASE)
 
@@ -32,15 +38,19 @@ def normalise_order_id(raw: str) -> str:
 
 @function_tool
 async def my_orders(ctx: RunContextWrapper[TenantContext]) -> MyOrdersResult:
-    """List the orders belonging to the customer you are already talking to.
+    """What this customer has with the store: their orders and their basket.
 
     Use this FIRST whenever someone asks about "my order", "my delivery", "where
-    is it", or wants a refund, and the storefront has already identified them.
-    It takes no parameters — you cannot choose whose orders to list, and there is
-    nothing to ask the customer for.
+    is it", what is in their cart or basket, or wants a refund. It takes no
+    parameters — you cannot choose whose orders to list, and there is nothing to
+    ask the customer for.
 
     If it returns orders, name them and their status directly. Do not ask for an
     order number or an email address: you already have the orders.
+
+    Keep orders and basket apart when you answer. An order is paid for and on its
+    way; a basket line is not bought yet, and telling someone their basket has
+    shipped is worse than saying nothing.
 
     If it returns `no_session` or `none`, fall back to asking for the order id
     and the email on it, and use `order_lookup`.
@@ -49,7 +59,21 @@ async def my_orders(ctx: RunContextWrapper[TenantContext]) -> MyOrdersResult:
     tenant.note_tool("my_orders")
     front = tenant.storefront
 
-    if front is None or (not front.orders and not front.customer_email):
+    # The basket travels with every answer. It is the same question — what
+    # have I got with you — and it only ever comes from the page, because a
+    # basket is not something we hold.
+    basket = (
+        [
+            CartLine(name=c.name, quantity=c.quantity, price=c.price)
+            for c in front.cart
+        ]
+        if front is not None
+        else []
+    )
+
+    if front is None or (
+        not front.orders and not front.customer_email and not front.cart
+    ):
         await audit.record(
             tenant, action="my_orders", target="session", outcome="no_session"
         )
@@ -101,6 +125,7 @@ async def my_orders(ctx: RunContextWrapper[TenantContext]) -> MyOrdersResult:
                     )
                     for r in owned
                 ],
+                cart=basket,
                 message=f"{len(owned)} order(s) on this account.",
             )
 
@@ -139,6 +164,7 @@ async def my_orders(ctx: RunContextWrapper[TenantContext]) -> MyOrdersResult:
                 )
                 for o in front.orders
             ],
+            cart=basket,
             message=(
                 f"{len(front.orders)} order(s), from the store page itself."
                 if front.verified
@@ -150,13 +176,35 @@ async def my_orders(ctx: RunContextWrapper[TenantContext]) -> MyOrdersResult:
             ),
         )
 
+    # No orders, but possibly a basket — someone browsing who has not bought yet
+    # is a real customer with a real question, not an empty result.
+    if basket:
+        await audit.record(
+            tenant,
+            action="my_orders",
+            target=front.customer_ref or "storefront",
+            outcome="found",
+            source=front.grade,
+            count=0,
+        )
+        return MyOrdersResult(
+            outcome="found",
+            source="storefront" if front.verified else "declared",
+            customer_name=front.customer_name,
+            cart=basket,
+            message=(
+                f"No orders yet, but {len(basket)} item(s) in the basket. "
+                "Nothing here is bought — do not describe it as an order."
+            ),
+        )
+
     await audit.record(
         tenant, action="my_orders", target="session", outcome="none", source=front.grade
     )
     return MyOrdersResult(
         outcome="none",
         customer_name=front.customer_name,
-        message="This customer has no orders.",
+        message="This customer has no orders and an empty basket.",
     )
 
 

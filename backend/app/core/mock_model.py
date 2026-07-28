@@ -34,7 +34,14 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 # is a refund, not an order status question.
 ROUTING = [
     ("Refunds", ("refund", "money back", "return this", "send it back", "reimburse")),
-    ("Orders", ("track", "where is", "delivered", "shipped", "arrive", "my order")),
+    # "my current orders in cart" used to match none of these, fall through to
+    # the Support default, and come back as a dispatch-hours policy quote. Anything
+    # possessive about a purchase belongs to Orders, and so does the basket — it is
+    # the only specialist that can see either.
+    ("Orders", ("track", "where is", "delivered", "shipped", "arrive", "my order",
+                "my current order", "my recent order", "my last order", "my parcel",
+                "my package", "my delivery", "my purchase", "my item",
+                "cart", "basket", "trolley", "bag")),
     ("Products", ("compare", "versus", " vs ", "cheaper", "in stock", "recommend",
                   "which one", "difference between", "desk", "chair", "cushion",
                   "sell", "buy", "price", "cost", "do you have", "stock")),
@@ -47,10 +54,13 @@ REFUND_WORDS = ("refund", "money back", "reimburse", "send it back", "return thi
 # Phrasings that mean "the thing I bought", where the customer is not going to
 # supply an order number because from where they are standing they should not
 # have to.
+CART_WORDS = ("cart", "basket", "trolley", "in my bag")
+
 MINE_WORDS = (
     "my order", "my orders", "my delivery", "my parcel", "my package",
     "my purchase", "my stuff", "where is it", "where's it", "my item",
     "my refund", "my return", "track", "my last order", "recent order",
+    "my current order", "cart", "basket",
 )
 
 # A message that is *only* a greeting. Matched on the whole message rather than
@@ -293,18 +303,43 @@ def _kind_of(payload: dict[str, Any]) -> str:
     return "order"
 
 
-def _phrase_my_orders(payload: dict[str, Any]) -> str:
+def _cart_sentence(cart: list[dict[str, Any]]) -> str:
+    listed = ", ".join(
+        f"{c['name']}"
+        + (f" ×{c['quantity']}" if int(c.get("quantity") or 1) > 1 else "")
+        + (f" at {c['price']}" if c.get("price") else "")
+        for c in cart[:5]
+    )
+    return f"In your basket right now: {listed}."
+
+
+def _phrase_my_orders(payload: dict[str, Any], asked_about_cart: bool = False) -> str:
     """The reply that replaces "what is your order number and email?"."""
     orders = payload.get("orders") or []
-    if not orders:
-        return (
-            "I can't see any orders on your account. If you ordered as a guest, "
-            "give me the order number and the email you used and I'll find it."
-        )
-
+    cart = payload.get("cart") or []
     name = str(payload.get("customer_name") or "").split(" ")[0]
     opener = f"Hi {name} — " if name else ""
     unverified = payload.get("source") == "declared"
+
+    # Asked about the basket, or has nothing else to talk about. Answered first
+    # and separately: a basket line is not bought, and the failure worth avoiding
+    # is telling someone their basket is on its way.
+    if cart and (asked_about_cart or not orders):
+        parts = [opener + _cart_sentence(cart)]
+        parts.append("Nothing there is bought yet.")
+        if orders:
+            parts.append(
+                f"Separately, you have {len(orders)} order(s) already placed — "
+                "say the word and I'll go through them."
+            )
+        return " ".join(parts)
+
+    if not orders:
+        return (
+            "I can't see any orders on your account, and your basket is empty. "
+            "If you ordered as a guest, give me the order number and the email "
+            "you used and I'll find it."
+        )
 
     if len(orders) == 1:
         one = orders[0]
@@ -500,13 +535,31 @@ class MockModel(Model):
         ):
             if kind not in seen:
                 continue
-            if kind == "orders" and seen[kind].get("outcome") != "found":
-                continue
+            if kind == "orders":
+                if seen[kind].get("outcome") != "found":
+                    continue
+                return self._say(
+                    _phrase_my_orders(
+                        seen[kind],
+                        asked_about_cart=any(w in lowered for w in CART_WORDS),
+                    )
+                )
             return self._say(_phrase(seen[kind]))
 
         # 5. Otherwise pick the one tool that fits and call it.
         if "policy_retriever" in available and any(w in lowered for w in POLICY_WORDS):
             return self._tool("policy_retriever", {"question": latest})
+
+        # Asked about the basket, and the page never told us there was one. Say
+        # that, rather than the generic menu — "I can help with orders and
+        # deliveries" to someone who just asked what is in their basket is the
+        # answer of something that did not listen.
+        if any(w in lowered for w in CART_WORDS) and "orders" in seen:
+            return self._say(
+                "I can't see your basket from here — that lives on the store page "
+                "rather than in your account. If you tell me what's in it I can "
+                "help with sizes, stock or delivery times."
+            )
 
         if "order_lookup" in available:
             order = _latest_first(ORDER_RE, latest, history)

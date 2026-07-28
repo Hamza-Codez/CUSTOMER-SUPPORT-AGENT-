@@ -173,8 +173,21 @@ class MyOrder(BaseModel):
     eta: str = ""
 
 
+class CartLine(BaseModel):
+    """One thing sitting in the basket, unbought."""
+
+    name: str
+    quantity: int = 1
+    price: str = ""
+
+
 class MyOrdersResult(BaseModel):
-    """The orders belonging to whoever the storefront says is on the page.
+    """What the customer in front of the storefront has with this store.
+
+    Orders and basket together, because "what have I got with you" is one
+    question and splitting it across two tools would mean the agent answering
+    half of it. The distinction still matters in the reply — an order is paid
+    for, a basket line is not — so they are separate fields, never one list.
 
     `source` is part of the contract rather than an implementation detail:
     - `store` — read from our own records after the storefront proved identity
@@ -189,6 +202,7 @@ class MyOrdersResult(BaseModel):
     source: Literal["store", "storefront", "declared", "none"] = "none"
     customer_name: str = ""
     orders: list[MyOrder] = []
+    cart: list[CartLine] = []
     message: str
 
     def __str__(self) -> str:
