@@ -11,10 +11,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+# The built-in demo credentials, named here so a deployment check can spot
+# that they were never changed. Kept in step with the field default below.
+_DEMO_TOKENS = "demo-token:biz_demo:customer,ops-token:biz_demo:operator"
 
 
 class Settings(BaseSettings):
@@ -64,18 +68,55 @@ class Settings(BaseSettings):
     retrieval_use_vectors: bool = True
     retrieval_vector_floor: float = 0.65
 
+    # --- Deployment -------------------------------------------------------------
+    #
+    # `development` keeps every zero-setup default: mock provider, in-memory
+    # store, a generated signing secret. `production` refuses all three, because
+    # each of them fails silently rather than loudly — a deployed app on the mock
+    # provider looks like it works and answers from a lookup table.
+    environment: Literal["development", "production"] = "development"
+
+    # Backing store for `signing_key`'s per-process fallback.
+    _ephemeral_key: str | None = PrivateAttr(default=None)
+
+    # Origins the browser API is served to. `*` is the development default and is
+    # rejected in production: the site key already scopes a widget to its own
+    # origins, but the dashboard's own endpoints are bearer-token routes that
+    # should not be callable from any page on the internet.
+    allowed_origins: str = "*"
+
     # Empty means the in-memory store. A URL means real Postgres.
     database_url: str = ""
 
-    # Signs session tokens. Generated per-process when unset so the app still
-    # boots with zero setup — which also means every restart signs everyone out,
-    # so set it in .env for anything you expect to stay logged into.
-    jwt_secret: str = Field(default_factory=lambda: secrets.token_urlsafe(48))
+    # Connection pool bounds. Small by default because a serverless platform runs
+    # many instances of this process at once, and a pool sized for one long-lived
+    # server becomes a connection-limit outage when fifty of them wake up.
+    db_pool_min: int = 1
+    db_pool_max: int = 5
+
+    # Set when the DSN points at a *transaction* pooler (Supabase port 6543,
+    # pgBouncer, pgcat). Those multiplex one server connection across clients per
+    # transaction, so a prepared statement cached by one client is not there for
+    # the next — asyncpg must be told to stop caching them, or you get
+    # intermittent "prepared statement _asyncpg_stmt_ does not exist" under load.
+    db_transaction_pooler: bool = False
+
+    # Signs session tokens. Empty means "generate one for this process" — see
+    # `signing_key`. Left empty the app still boots with zero setup, at the cost
+    # of every restart signing everyone out.
+    #
+    # On a serverless platform that is worse than inconvenient: each instance
+    # generates its own, so a token minted by one is rejected by the next, and
+    # sign-ins fail at random. `production` therefore requires it explicitly.
+    #
+    # Stored as the raw value rather than pre-filled by a default factory, so
+    # "was this configured?" stays a question the code can answer.
+    jwt_secret: str = ""
 
     # Static tokens for the demo and the test suite. Real accounts authenticate
     # with a JWT from /auth/login; these remain so the seeded demo works without
     # anyone signing up.
-    dev_tokens: str = "demo-token:biz_demo:customer,ops-token:biz_demo:operator"
+    dev_tokens: str = _DEMO_TOKENS
 
     # --- Email ----------------------------------------------------------------
     # `mock` records the message in the store and sends nothing, so the whole
@@ -109,6 +150,101 @@ class Settings(BaseSettings):
     @property
     def store_kind(self) -> Literal["mock", "postgres"]:
         return "postgres" if self.database_url.strip() else "mock"
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    @property
+    def signing_key(self) -> str:
+        """The key session tokens are actually signed with.
+
+        Falls back to a value generated once per process. Cached on the settings
+        instance rather than regenerated per call — otherwise every token would
+        be signed with a key that no longer exists by the time it is verified.
+        """
+        configured = self.jwt_secret.strip()
+        if configured:
+            return configured
+        if self._ephemeral_key is None:
+            self._ephemeral_key = secrets.token_urlsafe(48)
+        return self._ephemeral_key
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parsed allowed origins. `*` stays a single wildcard entry."""
+        raw = self.allowed_origins.strip()
+        if raw == "*":
+            return ["*"]
+        return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+
+    def deployment_problems(self) -> list[str]:
+        """Everything about this configuration that would fail quietly in production.
+
+        Returned as a list rather than raised one at a time: someone deploying
+        wants the whole list on the first attempt, not to fix one variable, redeploy,
+        and discover the next.
+
+        Every item here is something that *works* in the sense of not erroring —
+        which is exactly why it needs a check. A deployed app on the mock provider
+        answers every question from a lookup table and looks entirely healthy.
+        """
+        if not self.is_production:
+            return []
+
+        problems: list[str] = []
+
+        if self.store_kind == "mock":
+            problems.append(
+                "DATABASE_URL is unset, so this would run on the in-memory store: "
+                "every request gets a different empty database and nothing is kept."
+            )
+        if self.model_provider == "mock":
+            problems.append(
+                "MODEL_PROVIDER=mock answers from a deterministic lookup table. "
+                "It will look like it is working. Set MODEL_PROVIDER=gemini."
+            )
+        if self.model_provider == "gemini" and not self.gemini_api_key.strip():
+            problems.append("MODEL_PROVIDER=gemini but GEMINI_API_KEY is empty.")
+        if self.embedding_provider == "gemini" and not self.gemini_api_key.strip():
+            problems.append("EMBEDDING_PROVIDER=gemini but GEMINI_API_KEY is empty.")
+
+        # The one that would actually be exploited. These are documented,
+        # guessable strings, and `ops-token` resolves to an operator — so a
+        # deployment that keeps them is one `Authorization: Bearer ops-token`
+        # away from handing a stranger the refund queue.
+        if self.dev_tokens.strip() == _DEMO_TOKENS:
+            problems.append(
+                "DEV_TOKENS still holds the built-in demo credentials, and "
+                "'ops-token' grants operator access to biz_demo. Set DEV_TOKENS="
+                " (empty) to disable them, or to your own unguessable values. "
+                "Note the seeded /demo playground stops working when you do — it "
+                "authenticates with exactly these."
+            )
+
+        if not self.jwt_secret.strip():
+            problems.append(
+                "JWT_SECRET is unset, so each instance generates its own. On a "
+                "serverless platform a token issued by one instance is rejected "
+                "by the next and sign-ins fail at random."
+            )
+
+        if self.cors_origins == ["*"]:
+            problems.append(
+                "ALLOWED_ORIGINS=* exposes the bearer-token dashboard routes to "
+                "any page on the internet. List your frontend's origins."
+            )
+        if self.public_base_url.startswith("http://"):
+            problems.append(
+                f"PUBLIC_BASE_URL is {self.public_base_url!r}. It is baked into "
+                "widget.js and into email links, so it has to be the public HTTPS "
+                "address of this API."
+            )
+        if self.email_provider == "smtp" and not self.smtp_host.strip():
+            problems.append("EMAIL_PROVIDER=smtp but SMTP_HOST is empty.")
+
+        return problems
+
 
 
 @lru_cache
