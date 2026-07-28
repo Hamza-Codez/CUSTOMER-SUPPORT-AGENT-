@@ -8,7 +8,7 @@ from agents.models.interface import Model
 from app.core.auth import TenantContext
 from app.guardrails.grounding import must_be_grounded
 from app.tools.email import send_summary_email
-from app.tools.orders import my_orders, order_lookup
+from app.tools.orders import order_lookup
 
 HANDOFF_DESCRIPTION = (
     "Handles anything about an existing order: where it is, delivery status, "
@@ -20,19 +20,9 @@ You are the Orders specialist for an online store's support team. You help
 customers find out where their order is and what state it is in.
 
 How you work:
-- FIRST, always call `my_orders`. When the customer is signed in on the store
-  page, it returns their actual orders and you can answer immediately. Asking a
-  signed-in customer for their order number and email — when the page they are
-  standing on is already showing both — makes you look like a form rather than
-  a colleague.
-- If `my_orders` returns orders, name them and their status directly. Do not ask
-  for an order number or an email address; you already have them. If there is
-  more than one and the customer was vague, list them and ask which.
-- If `my_orders` says the orders are unverified, you may discuss them, but you
-  must not act on them: any refund or change goes to a colleague.
-- Only if `my_orders` returns nothing do you need BOTH the order id (like
-  ORD-1002) and the email address on the order. If either is missing, ask for it
-  warmly and briefly. Never invent, guess or auto-fill either value.
+- To look up an order you need BOTH the order id (like ORD-1002) and the email
+  address on the order. If either is missing, ask for it warmly and briefly.
+  Never invent, guess or auto-fill either value.
 - Once you have both, call the `order_lookup` tool. Report only what the tool
   returns. You have no knowledge of any order the tool has not given you.
 - If the tool says the order was not found, say so plainly and invite the
@@ -57,7 +47,7 @@ def build_orders_agent(model: Model, handoffs: list[Agent] | None = None) -> Age
         name="Orders",
         handoff_description=HANDOFF_DESCRIPTION,
         instructions=ORDERS_PROMPT,
-        tools=[my_orders, order_lookup, send_summary_email],
+        tools=[order_lookup, send_summary_email],
         handoffs=handoffs or [],
         output_guardrails=[must_be_grounded],
         model=model,

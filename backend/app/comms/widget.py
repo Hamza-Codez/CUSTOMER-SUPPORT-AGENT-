@@ -55,35 +55,6 @@ _TEMPLATE = r"""
   if (window.__fteWidgetMounted) return;
   window.__fteWidgetMounted = true;
 
-  /* Who the storefront says is standing here.
-   *
-   * Two grades, and the widget never blurs them. `window.fteSession` is a token
-   * the seller's *server* signed, so it proves identity and the customer is
-   * never asked for an order number or an email. `window.fteContext` is the
-   * page describing itself, unsigned — useful, shown, and trusted with nothing.
-   *
-   * Read live rather than captured at load: a storefront that hydrates its cart
-   * after this script runs would otherwise be permanently empty to us. */
-  function identity() {
-    var headers = { "X-FTE-Site-Key": KEY };
-    var signed = window.fteSession;
-    if (typeof signed === "string" && signed) {
-      headers["X-FTE-Customer-Session"] = signed;
-    } else if (window.fteContext && typeof window.fteContext === "object") {
-      try {
-        headers["X-FTE-Declared-Context"] = JSON.stringify(window.fteContext);
-      } catch (e) {}
-    }
-    return headers;
-  }
-
-  function withJson(extra) {
-    var headers = identity();
-    headers["Content-Type"] = "application/json";
-    if (extra) for (var k in extra) headers[k] = extra[k];
-    return headers;
-  }
-
   var LAUNCHER_LABEL = script.getAttribute("data-fte-label") || "Support";
   /* A session id per browser tab. Persisted so a refresh mid-conversation does
      not lose the identity the customer already proved. */
@@ -141,26 +112,6 @@ _TEMPLATE = r"""
     "background:linear-gradient(180deg,#870775,#4d0342)}",
     ".ft button:disabled{opacity:.45;cursor:default}",
     ".by{padding:0 12px 9px;font-size:10px;color:#4b4b55;text-align:center}",
-    /* The order rows. This is what replaces asking a signed-in customer for an
-       order number their own screen is already showing. */
-    ".rows{display:flex;flex-direction:column;gap:6px;margin:2px 0 4px}",
-    ".rowlbl{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#6b6b75;margin-bottom:2px}",
-    ".row{display:flex;align-items:center;gap:9px;width:100%;text-align:left;cursor:pointer;",
-    "padding:9px 10px;border-radius:8px;border:1px solid #26262c;background:#16161a;color:#d6d6db;font:inherit}",
-    ".row:hover{border-color:#870775;background:#1c1c21}",
-    ".row .id{font-size:12.5px;font-weight:600;color:#fafafa}",
-    ".row .meta{font-size:11px;color:#9d9da6}",
-    ".row .amt{margin-left:auto;font-size:12px;color:#d6d6db;white-space:nowrap}",
-    /* A dot per state, so the list is scannable before it is read. */
-    ".dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:#6b6b75}",
-    ".dot.on{background:#34d399}",
-    ".dot.go{background:#fbbf24}",
-    /* Cart items are a different colour on purpose: they are not orders, and a
-       customer must never mistake something unpaid for something bought. */
-    ".row.cart{border-style:dashed;border-color:#34343c;background:transparent}",
-    ".row.cart:hover{border-color:#6d28d9}",
-    ".row.cart .dot{background:#6d28d9}",
-    ".unv{font-size:10.5px;color:#fbbf24;margin-top:2px}",
     "@media (max-width:420px){.panel{right:8px;left:8px;width:auto;bottom:76px}}",
   ].join("");
   root.appendChild(style);
@@ -176,9 +127,6 @@ _TEMPLATE = r"""
   var input = null;
   var sendBtn = null;
   var busy = false;
-  /* True once the customer has actually said something. Guards the opening
-     rows from being redrawn over a live conversation. */
-  var exchanged = false;
 
   function text(el, value) {
     el.appendChild(document.createTextNode(value));
@@ -210,118 +158,9 @@ _TEMPLATE = r"""
     log.scrollTop = log.scrollHeight;
   }
 
-  /* One clickable row. `kind` decides the colour, and the colours mean
-     different things: an order is something they bought, a cart line is not. */
-  function row(kind, title, meta, amount, onClick) {
-    var el = document.createElement("button");
-    el.type = "button";
-    el.className = "row" + (kind === "cart" ? " cart" : "");
-
-    var dot = document.createElement("span");
-    dot.className =
-      "dot" +
-      (kind === "delivered" ? " on" : kind === "moving" ? " go" : "");
-    el.appendChild(dot);
-
-    var mid = document.createElement("span");
-    var id = document.createElement("span");
-    id.className = "id";
-    text(id, title);
-    mid.appendChild(id);
-    if (meta) {
-      var m = document.createElement("span");
-      m.className = "meta";
-      text(m, " " + meta);
-      mid.appendChild(m);
-    }
-    el.appendChild(mid);
-
-    if (amount) {
-      var amt = document.createElement("span");
-      amt.className = "amt";
-      text(amt, amount);
-      el.appendChild(amt);
-    }
-
-    el.onclick = onClick;
-    return el;
-  }
-
-  /* Everything the page already knows, offered as one tap.
-     A customer looking at their own orders page should not be asked to type an
-     order number out of it. */
-  function renderSession(data) {
-    var orders = data.orders || [];
-    var cart = data.cart || [];
-    if (!orders.length && !cart.length) return;
-
-    var wrap = document.createElement("div");
-    wrap.className = "rows";
-
-    if (orders.length) {
-      var lbl = document.createElement("div");
-      lbl.className = "rowlbl";
-      text(lbl, orders.length === 1 ? "Your order" : "Your orders");
-      wrap.appendChild(lbl);
-
-      for (var i = 0; i < orders.length; i++) {
-        (function (o) {
-          var status = String(o.status || "").replace(/_/g, " ");
-          var kind =
-            status === "delivered"
-              ? "delivered"
-              : status
-                ? "moving"
-                : "order";
-          var meta = status + (o.eta ? " · " + o.eta : "");
-          wrap.appendChild(
-            row("order" === kind ? "order" : kind, o.order_id, meta, o.total, function () {
-              send("About my order " + o.order_id);
-            })
-          );
-        })(orders[i]);
-      }
-
-      if (!data.verified) {
-        var warn = document.createElement("div");
-        warn.className = "unv";
-        text(warn, "Read from this page — a colleague checks anything that moves money.");
-        wrap.appendChild(warn);
-      }
-    }
-
-    if (cart.length) {
-      var clbl = document.createElement("div");
-      clbl.className = "rowlbl";
-      clbl.style.marginTop = "6px";
-      text(clbl, "In your basket");
-      wrap.appendChild(clbl);
-
-      for (var j = 0; j < cart.length; j++) {
-        (function (c) {
-          wrap.appendChild(
-            row(
-              "cart",
-              c.name,
-              c.quantity > 1 ? "×" + c.quantity : "",
-              c.price,
-              function () {
-                send("Tell me about the " + c.name + " in my basket");
-              }
-            )
-          );
-        })(cart[j]);
-      }
-    }
-
-    log.appendChild(wrap);
-    log.scrollTop = log.scrollHeight;
-  }
-
   function send(value) {
     if (busy || !value) return;
     busy = true;
-    exchanged = true;
     sendBtn.disabled = true;
     bubble("me", value);
     input.value = "";
@@ -334,7 +173,7 @@ _TEMPLATE = r"""
 
     fetch(API + "/chat/public", {
       method: "POST",
-      headers: withJson(),
+      headers: { "Content-Type": "application/json", "X-FTE-Site-Key": KEY },
       body: JSON.stringify({ message: value, session_id: session }),
       signal: controller ? controller.signal : undefined,
     })
@@ -382,6 +221,23 @@ _TEMPLATE = r"""
        Goods", the demo store. Only the key knows whose site this is. */
     text(title, "Support");
     var sub = document.createElement("small");
+
+    fetch(API + "/widget/config", { headers: { "X-FTE-Site-Key": KEY } })
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (cfg) {
+        if (cfg && cfg.business_name) {
+          title.textContent = "";
+          text(title, cfg.business_name);
+          sub.textContent = "";
+          text(sub, "Support");
+        }
+      })
+      .catch(function () {
+        /* The header is cosmetic. A store that cannot be named still answers
+           questions, so this must never block the conversation. */
+      });
     var close = document.createElement("button");
     close.className = "x";
     close.type = "button";
@@ -420,65 +276,14 @@ _TEMPLATE = r"""
     panel.appendChild(by);
     root.appendChild(panel);
 
-    openSession();
-  }
-
-  /* One call establishes the whole opening: whose store this is, who is
-     standing here, and what they own. The greeting waits for it — opening with
-     "what is your order number?" and *then* discovering we already knew is
-     worse than a half-second pause.
-
-     Re-run every time the panel is opened, because a single-page storefront
-     changes underneath a widget that never reloads: navigate from Orders to a
-     product, add something to the basket, reopen, and rows fetched once at
-     first open would be describing a page the customer has left. */
-  function openSession() {
-    fetch(API + "/widget/session", { headers: identity() })
-      .then(function (r) {
-        return r.ok ? r.json() : null;
-      })
-      .then(function (data) {
-        if (data && data.business_name) {
-          title.textContent = "";
-          text(title, data.business_name);
-          sub.textContent = "";
-          text(sub, "Support");
-        }
-        /* Only ever redrawn while the conversation is still empty. Once someone
-           has actually asked something, dropping a fresh block of order rows
-           under their reply would read as the widget losing its place. */
-        if (exchanged) return;
-        log.textContent = "";
-
-        if (data && (data.customer_name || (data.orders || []).length)) {
-          var who = data.customer_name
-            ? "Hi " + String(data.customer_name).split(" ")[0] + " — "
-            : "";
-          bubble(
-            "it",
-            who +
-              "I can see what you've got with us. Tap an order below, or just ask."
-          );
-          renderSession(data);
-        } else {
-          send("hi");
-        }
-      })
-      .catch(function () {
-        /* The session is an accelerator, not a prerequisite. A store that cannot
-           identify its visitor still has a working assistant. */
-        if (!exchanged) send("hi");
-      });
+    send("hi");
   }
 
   function toggle() {
     if (!panel) {
       build();
-    } else if (panel.style.display === "none") {
-      panel.style.display = "flex";
-      openSession();
     } else {
-      panel.style.display = "none";
+      panel.style.display = panel.style.display === "none" ? "flex" : "none";
     }
     if (input) input.focus();
   }

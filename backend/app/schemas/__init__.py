@@ -157,58 +157,6 @@ class GreetResult(BaseModel):
         return _for_model(self)
 
 
-# --- Tool contract: my_orders --------------------------------------------------
-
-
-class MyOrder(BaseModel):
-    """One of the signed-in customer's own orders."""
-
-    order_id: str
-    status: str
-    placed_at: str = ""
-    total: str = ""
-    item_count: int = 0
-    carrier: str = ""
-    tracking_number: str = ""
-    eta: str = ""
-
-
-class CartLine(BaseModel):
-    """One thing sitting in the basket, unbought."""
-
-    name: str
-    quantity: int = 1
-    price: str = ""
-
-
-class MyOrdersResult(BaseModel):
-    """What the customer in front of the storefront has with this store.
-
-    Orders and basket together, because "what have I got with you" is one
-    question and splitting it across two tools would mean the agent answering
-    half of it. The distinction still matters in the reply — an order is paid
-    for, a basket line is not — so they are separate fields, never one list.
-
-    `source` is part of the contract rather than an implementation detail:
-    - `store` — read from our own records after the storefront proved identity
-    - `storefront` — described by the seller's signed assertion; we never held it
-    - `declared` — handed over unsigned by the page, so it proves nothing
-
-    The agent is told the difference because it changes what may be said next. A
-    declared order can be discussed; it cannot be refunded.
-    """
-
-    outcome: Literal["found", "none", "no_session"]
-    source: Literal["store", "storefront", "declared", "none"] = "none"
-    customer_name: str = ""
-    orders: list[MyOrder] = []
-    cart: list[CartLine] = []
-    message: str
-
-    def __str__(self) -> str:
-        return _for_model(self)
-
-
 # --- Tool contract: refund_processor -----------------------------------------
 
 
@@ -386,50 +334,6 @@ class SiteKeyView(BaseModel):
 
 class SiteKeyList(BaseModel):
     keys: list[SiteKeyView]
-
-
-class SiteKeySecret(BaseModel):
-    """The signing secret, returned only from operator-only endpoints.
-
-    Deliberately absent from `SiteKeyView`: that is what the integrations page
-    lists, and a secret that appears in a list response is a secret in a browser
-    tab, a screenshot and a support ticket.
-    """
-
-    key: str
-    secret: str
-
-
-class WidgetOrderView(BaseModel):
-    order_id: str
-    status: str = ""
-    placed_at: str = ""
-    total: str = ""
-    item_count: int = 0
-    tracking_number: str = ""
-    eta: str = ""
-
-
-class WidgetCartItemView(BaseModel):
-    name: str
-    quantity: int = 1
-    price: str = ""
-
-
-class WidgetSession(BaseModel):
-    """What the widget can show before the customer types anything.
-
-    `verified` drives the interface honestly: an attested session gets the
-    customer's name and actionable order rows, a declared one gets the same rows
-    marked as read from the page. A widget that looked identical either way would
-    be quietly overstating what it knows.
-    """
-
-    business_name: str
-    verified: bool = False
-    customer_name: str = ""
-    orders: list[WidgetOrderView] = []
-    cart: list[WidgetCartItemView] = []
 
 
 class WidgetConfig(BaseModel):

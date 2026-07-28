@@ -89,14 +89,10 @@ from app.schemas import (
     SignupRequest,
     SiteKeyCreate,
     SiteKeyList,
-    SiteKeySecret,
     SiteKeyView,
     SiteScanRequest,
     SiteScanResult,
-    WidgetCartItemView,
     WidgetConfig,
-    WidgetOrderView,
-    WidgetSession,
 )
 
 log = logging.getLogger("fte")
@@ -351,30 +347,6 @@ def collect_actions(result: Any) -> list[AgentAction]:
             actions.append(
                 AgentAction(kind="greeted", label="Introduced itself", ref=None)
             )
-        elif "orders" in payload:
-            # MyOrdersResult. Tested before the singular `order` shapes below,
-            # and the chip names the provenance because "recognised you" and
-            # "read it off the page" are different claims.
-            count = len(payload.get("orders") or [])
-            source = payload.get("source")
-            if not count:
-                actions.append(
-                    AgentAction(kind="no_customer_session", label="Nobody signed in")
-                )
-            elif source == "declared":
-                actions.append(
-                    AgentAction(
-                        kind="orders_declared",
-                        label=f"{count} order(s) read from the page — unverified",
-                    )
-                )
-            else:
-                actions.append(
-                    AgentAction(
-                        kind="orders_listed",
-                        label=f"Recognised you · {count} order(s)",
-                    )
-                )
         elif "products" in payload:
             actions.append(_product_action(payload))
         elif "passages" in payload:
@@ -389,12 +361,9 @@ def collect_actions(result: Any) -> list[AgentAction]:
                     ref=payload["escalation_id"],
                 )
             )
-        elif payload.get("outcome") in {"sent", "already_sent", "refused", "failed"}:
-            # EmailResult. Matched on its outcome vocabulary rather than on its
-            # shape: an order lookup that found nothing drops its null `order`
-            # field and is byte-identical to an email result, so "carries nothing
-            # the others carry" rendered every missing order as an email.
-            # The chip never shows the address — the UI has no business with it.
+        elif set(payload) <= {"outcome", "message"}:
+            # EmailResult: identified by carrying nothing the others carry. The
+            # chip never shows the address — the UI has no business displaying it.
             actions.append(_email_action(payload))
         else:
             actions.append(_order_action(payload))
@@ -424,20 +393,6 @@ async def load_verified_identity(tenant: TenantContext) -> None:
         tenant.verified_email = record.email
         tenant.verified_name = record.name
 
-    # A signed storefront assertion is verification too, and a stronger kind: an
-    # email address is something a customer types, whereas this is the seller's
-    # own server stating that this person is logged in as this customer. It is
-    # re-sent with every request, so nothing is persisted — the evidence lasts
-    # exactly as long as the page the customer is standing on.
-    front = tenant.storefront
-    if front is not None and front.verified:
-        for order in front.orders:
-            tenant.verified_orders.add(order.order_id)
-        if front.customer_email:
-            tenant.verified_email = front.customer_email
-        if front.customer_name:
-            tenant.verified_name = front.customer_name
-
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, tenant: TenantDep) -> ChatResponse:
@@ -455,72 +410,6 @@ async def widget_config(tenant: SiteKeyDep) -> WidgetConfig:
     name = await tenant.store.get_business_name(tenant.business_id)
     return WidgetConfig(
         business_name=name or get_settings().business_display_name
-    )
-
-
-@app.get("/widget/session", response_model=WidgetSession)
-async def widget_session(tenant: SiteKeyDep) -> WidgetSession:
-    """Everything the widget can put on screen before a word is typed.
-
-    This is what replaces "what is your order number and the email on it?" for a
-    customer who is signed in on the store page. The orders come from our own
-    records when the storefront proved who this is, and from the storefront's own
-    assertion when the seller keeps their order data — never from the browser
-    unless the browser's claim is signed, and then it is marked unverified.
-    """
-    front = tenant.storefront
-    name = await tenant.store.get_business_name(tenant.business_id)
-    business = name or get_settings().business_display_name
-
-    if front is None:
-        return WidgetSession(business_name=business)
-
-    orders: list[WidgetOrderView] = []
-
-    # Our own records, if the storefront proved identity and we hold this
-    # customer's orders. Preferred: it is the copy a refund would act on.
-    if front.verified and front.customer_email:
-        owned = [
-            r
-            for r in await tenant.store.list_orders(tenant.business_id, limit=200)
-            if r.customer_email.casefold() == front.customer_email.casefold()
-        ]
-        orders = [
-            WidgetOrderView(
-                order_id=r.order_id,
-                status=r.status,
-                placed_at=r.placed_at,
-                total=r.total,
-                item_count=r.item_count,
-                tracking_number=r.tracking_number or "",
-                eta=r.eta or "",
-            )
-            for r in owned
-        ]
-
-    if not orders:
-        orders = [
-            WidgetOrderView(
-                order_id=o.order_id,
-                status=o.status,
-                placed_at=o.placed_at,
-                total=o.total,
-                item_count=o.item_count,
-                tracking_number=o.tracking_number,
-                eta=o.eta,
-            )
-            for o in front.orders
-        ]
-
-    return WidgetSession(
-        business_name=business,
-        verified=front.verified,
-        customer_name=front.customer_name,
-        orders=orders,
-        cart=[
-            WidgetCartItemView(name=c.name, quantity=c.quantity, price=c.price)
-            for c in front.cart
-        ],
     )
 
 
@@ -1040,9 +929,6 @@ async def create_site_key(
         # `pk_` so a key is recognisable as public on sight, in a log or a paste.
         key=f"pk_{secrets.token_urlsafe(24)}",
         business_id=tenant.business_id,
-        # `sk_` for the same reason, in the opposite direction: a string starting
-        # sk_ appearing anywhere client-side is instantly recognisable as wrong.
-        secret=f"sk_{secrets.token_urlsafe(32)}",
         label=req.label.strip(),
         allowed_origins=origins,
         preview=req.preview,
@@ -1064,28 +950,6 @@ async def list_site_keys(
 ) -> SiteKeyList:
     records = await tenant.store.list_site_keys(tenant.business_id)
     return SiteKeyList(keys=[_site_key_view(r) for r in records])
-
-
-@app.get("/site-keys/{key}/secret", response_model=SiteKeySecret)
-async def read_site_key_secret(
-    key: str,
-    tenant: TenantContext = Depends(require_operator),
-) -> SiteKeySecret:
-    """The signing secret for a key this tenant owns.
-
-    Its own endpoint rather than a field on the list, so a secret is never in a
-    response that a page renders. Readable more than once on purpose: an operator
-    already has full access to their tenant, and a show-once secret in a
-    self-serve tool mostly generates lost keys and a support ticket.
-    """
-    record = await tenant.store.get_site_key(key)
-    if record is None or record.business_id != tenant.business_id:
-        # Same answer whether it does not exist or belongs to someone else.
-        raise HTTPException(status_code=404, detail="No such key on this account.")
-    await audit.record(
-        tenant, action="site_key_secret_read", target=key[:12], outcome="read"
-    )
-    return SiteKeySecret(key=record.key, secret=record.secret)
 
 
 @app.delete("/site-keys/{key}", status_code=204)

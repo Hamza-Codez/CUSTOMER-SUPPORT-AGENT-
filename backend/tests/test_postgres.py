@@ -867,32 +867,3 @@ class TestSiteKeysOnPostgres:
         record = await scratch_key(preview=True)
         found = await pg.get_site_key(record.key)
         assert found.permits("https://anywhere.example")
-
-    async def test_the_signing_secret_round_trips(self, pg, scratch_key):
-        """The column the storefront assertion is verified against.
-
-        A secret that did not survive the round trip would not fail loudly — it
-        would fail as every signed assertion being silently rejected, and a
-        widget quietly going back to asking for email addresses.
-        """
-        record = await scratch_key(secret="sk_round_trip", preview=True)
-        found = await pg.get_site_key(record.key)
-        assert found.secret == "sk_round_trip"
-
-    async def test_a_key_predating_the_column_reads_as_empty_not_null(
-        self, pg, scratch_key
-    ):
-        """The additive migration's default.
-
-        `create table if not exists` does nothing to an existing table, so the
-        secret arrives on live rows via `alter table ... add column`. Its default
-        has to be a string, because `read_context` checks falsiness and a None
-        would reach PyJWT instead.
-        """
-        record = await scratch_key(preview=True)
-        async with pg.pool.acquire() as conn:
-            await conn.execute(
-                "update fte.site_keys set secret = default where key = $1", record.key
-            )
-        found = await pg.get_site_key(record.key)
-        assert found.secret == ""

@@ -296,9 +296,6 @@ create table if not exists fte.site_keys (
     id              bigserial primary key,
     key             text        not null unique,
     business_id     text        not null references fte.businesses (id) on delete cascade,
-    -- HMAC signing secret for storefront assertions. Sensitive at rest; never
-    -- returned by the endpoint the integrations page calls.
-    secret          text        not null default '',
     label           text        not null default '',
     allowed_origins text[]      not null default '{}',
     preview         boolean     not null default false,
@@ -320,5 +317,3 @@ create index if not exists site_keys_business_idx
 
 alter table fte.policies add column if not exists doc text not null default '';
 alter table fte.policies add column if not exists embedding vector(1536);
-
-alter table fte.site_keys add column if not exists secret text not null default '';
