@@ -77,12 +77,20 @@ class TestChatFlow:
         ]
 
     def test_missing_details_asks_rather_than_guessing(self, client):
+        """It checks the page first, then asks — and reveals nothing either way.
+
+        The dashboard has no storefront behind it, so `my_orders` correctly finds
+        nobody signed in. What matters is that no order was read and the customer
+        is asked, not that no tool ran: asking the page before asking the person
+        is the behaviour, not a slip.
+        """
         body = client.post(
             "/chat",
             json={"message": "where is my order?", "session_id": "t2"},
             headers=AUTH,
         ).json()
-        assert tool_actions(body) == []
+        kinds = [a["kind"] for a in tool_actions(body)]
+        assert kinds == ["no_customer_session"]
         assert "order number" in body["reply"].lower()
 
     def test_identity_mismatch_surfaces_as_an_action(self, client):
@@ -94,7 +102,8 @@ class TestChatFlow:
             },
             headers=AUTH,
         ).json()
-        assert tool_actions(body)[0]["kind"] == "identity_check_failed"
+        kinds = [a["kind"] for a in tool_actions(body)]
+        assert "identity_check_failed" in kinds
         assert "FedEx" not in body["reply"]
 
 
@@ -106,14 +115,17 @@ class TestSessionMemory:
             json={"message": "where is my order ORD-1002?", "session_id": "mem"},
             headers=AUTH,
         ).json()
-        assert tool_actions(first) == []
+        # Nothing was read: it checked whether the page knew the customer, found
+        # it did not, and asked. No order details either way.
+        assert [a["kind"] for a in tool_actions(first)] == ["no_customer_session"]
+        assert "FedEx" not in first["reply"]
 
         second = client.post(
             "/chat",
             json={"message": "ayesha.k@example.com", "session_id": "mem"},
             headers=AUTH,
         ).json()
-        assert tool_actions(second)[0]["kind"] == "order_looked_up"
+        assert "order_looked_up" in [a["kind"] for a in tool_actions(second)]
 
     def test_a_new_session_id_starts_clean(self, client):
         client.post(

@@ -246,6 +246,27 @@ Added 2026-07-27, probed against a live `uvicorn` on real PostgreSQL:
 | `/widget.js` served, 8.7 KB, API base baked in | pass |
 | **Crawler against two real storefronts** — allbirds.com returned its returns/exchanges page | pass |
 
+Storefront context, probed live on 2026-07-28 against real PostgreSQL:
+
+| What | Result |
+|---|---|
+| **445 tests**, mock and PostgreSQL, no skips | pass |
+| **Signed-in customer is never asked for an order number or email** | pass |
+| Greeted by name; three real orders and a cart line listed unprompted | pass |
+| **Forged assertion** (signed with the wrong secret) | verified=false, 0 orders |
+| Tampered payload / expired assertion | rejected, not downgraded |
+| **Declared (unsigned) order cannot be refunded** | refused |
+| Attested order the seller holds, not us → refund | refused, routed to a human |
+| Anonymous visitor still gets the order-id + email flow | pass |
+| Signing secret round-trips through `text` and the additive migration | pass |
+| `/widget.js` parses under `node --check` | pass |
+
+**Not verified: a real seller's signing implementation.** The reference signer is
+`sign_context` in `app/core/storefront.py`, and the verifier is tested against
+it. Nobody has yet signed an assertion from a Node runtime, so "your route
+handler's HS256 output verifies here" is expected rather than proven — it is
+plain JWT, but that is an expectation, not a measurement.
+
 **Not verified: the widget inside a real storefront.** `/widget.js` is served,
 its endpoint is exercised, and the script is checked for the things that would
 make it unsafe on someone else's page (no `innerHTML`, no `document.write`). But

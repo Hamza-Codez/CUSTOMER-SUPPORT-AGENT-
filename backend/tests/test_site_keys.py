@@ -250,7 +250,7 @@ class TestWidgetConfig:
     def test_the_script_no_longer_hardcodes_a_store_name(self, client):
         body = client.get("/widget.js").text
         assert "Aeron Home Goods" not in body
-        assert "/widget/config" in body
+        assert "/widget/session" in body
 
 
 class TestWidgetScript:

@@ -44,6 +44,15 @@ ROUTING = [
 
 REFUND_WORDS = ("refund", "money back", "reimburse", "send it back", "return this")
 
+# Phrasings that mean "the thing I bought", where the customer is not going to
+# supply an order number because from where they are standing they should not
+# have to.
+MINE_WORDS = (
+    "my order", "my orders", "my delivery", "my parcel", "my package",
+    "my purchase", "my stuff", "where is it", "where's it", "my item",
+    "my refund", "my return", "track", "my last order", "recent order",
+)
+
 # A message that is *only* a greeting. Matched on the whole message rather than
 # by substring, because "hi, where is my order" is an order question wearing a
 # hello, and routing it anywhere else would be the bug this replaced.
@@ -254,6 +263,10 @@ def _kind_of(payload: dict[str, Any]) -> str:
     # test further down would otherwise claim it as an email.
     if "can_do" in payload or payload.get("outcome") == "greeted":
         return "greet"
+    # Before "order": MyOrdersResult carries a list under `orders`, the singular
+    # lookup carries one under `order`.
+    if "orders" in payload:
+        return "orders"
     if "products" in payload:
         return "products"
     if "passages" in payload:
@@ -262,17 +275,72 @@ def _kind_of(payload: dict[str, Any]) -> str:
         return "refund"
     if "escalation_id" in payload:
         return "escalation"
-    # EmailResult carries only outcome+message, so it is identified by what the
-    # others have and it does not.
+
+    # Below here the payloads collide. `OrderLookupResult(outcome="not_found")`
+    # drops its null `order` field and serialises to exactly {outcome, message} —
+    # the same shape as every EmailResult. The old "identified by what it lacks"
+    # test therefore read every failed order lookup as an email, which is how a
+    # refund on an order we do not hold spun until max turns instead of saying so.
+    #
+    # The outcome vocabularies are disjoint, so they are what disambiguates.
+    outcome = payload.get("outcome")
+    if outcome in {"sent", "already_sent", "refused", "failed"}:
+        return "email"
+    if outcome in {"found", "not_found", "identity_mismatch"}:
+        return "order"
     if set(payload) <= {"outcome", "message"}:
         return "email"
     return "order"
+
+
+def _phrase_my_orders(payload: dict[str, Any]) -> str:
+    """The reply that replaces "what is your order number and email?"."""
+    orders = payload.get("orders") or []
+    if not orders:
+        return (
+            "I can't see any orders on your account. If you ordered as a guest, "
+            "give me the order number and the email you used and I'll find it."
+        )
+
+    name = str(payload.get("customer_name") or "").split(" ")[0]
+    opener = f"Hi {name} — " if name else ""
+    unverified = payload.get("source") == "declared"
+
+    if len(orders) == 1:
+        one = orders[0]
+        lines = [
+            f"{opener}I can see your order {one['order_id']}, "
+            f"currently {str(one.get('status') or 'unknown').replace('_', ' ')}."
+        ]
+        if one.get("tracking_number"):
+            lines.append(
+                f"It's with {one.get('carrier') or 'the carrier'}, tracking "
+                f"{one['tracking_number']}."
+            )
+        if one.get("eta"):
+            lines.append(f"Expected by {one['eta']}.")
+    else:
+        listed = ", ".join(
+            f"{o['order_id']} ({str(o.get('status') or 'unknown').replace('_', ' ')})"
+            for o in orders[:4]
+        )
+        lines = [f"{opener}I can see {len(orders)} orders on your account: {listed}."]
+        lines.append("Which one would you like to talk about?")
+
+    if unverified:
+        lines.append(
+            "I'm reading these from the page rather than your account, so I'll "
+            "get a colleague involved before anything is actioned."
+        )
+    return " ".join(lines)
 
 
 def _phrase(payload: dict[str, Any]) -> str:
     kind = _kind_of(payload)
     if kind == "greet":
         return str(payload.get("message") or FALLBACK)
+    if kind == "orders":
+        return _phrase_my_orders(payload)
     if kind == "products":
         return _phrase_products(payload)
     if kind == "policy":
@@ -406,14 +474,35 @@ class MockModel(Model):
                     f"{rejections[-1] if rejections else ''} "
                     "Let me get a colleague to pick this up with you."
                 )
-            step = self._refund_step(seen, latest, history)
+            step = self._refund_step(seen, latest, history, available, attempted)
             if step is not None:
                 return step
 
+        # 3b. Ask the page who this is, before asking the customer anything.
+        #     Mirrors the instruction the specialists carry: a signed-in customer
+        #     should never be interrogated for details their own screen shows.
+        if (
+            "my_orders" in available
+            and "my_orders" not in attempted
+            and "orders" not in seen
+            and any(w in lowered for w in MINE_WORDS)
+        ):
+            return self._tool("my_orders", {})
+
         # 4. A terminal tool result -> phrase it.
-        for kind in ("refund", "escalation", "email", "products", "policy", "order"):
-            if kind in seen:
-                return self._say(_phrase(seen[kind]))
+        #
+        # `my_orders` is only terminal when it actually found something. Asking
+        # the page who is here and being told "nobody" is the start of the work,
+        # not the end of it — treating it as an answer would strand every
+        # customer who is not signed in on a shrug.
+        for kind in (
+            "refund", "escalation", "email", "products", "policy", "orders", "order"
+        ):
+            if kind not in seen:
+                continue
+            if kind == "orders" and seen[kind].get("outcome") != "found":
+                continue
+            return self._say(_phrase(seen[kind]))
 
         # 5. Otherwise pick the one tool that fits and call it.
         if "policy_retriever" in available and any(w in lowered for w in POLICY_WORDS):
@@ -439,7 +528,12 @@ class MockModel(Model):
         return self._say(FALLBACK)
 
     def _refund_step(
-        self, seen: dict[str, dict[str, Any]], latest: str, history: str
+        self,
+        seen: dict[str, dict[str, Any]],
+        latest: str,
+        history: str,
+        available: set[str],
+        attempted: set[str],
     ) -> ModelResponse | None:
         """Next step of the refund chain, or None to fall through."""
         if "refund" in seen:
@@ -449,8 +543,17 @@ class MockModel(Model):
         if "policy" not in seen:
             return self._tool("policy_retriever", {"question": latest})
 
-        # Then prove who we are talking to.
+        # Then prove who we are talking to. The storefront may already have: if
+        # `my_orders` returned exactly one order there is nothing to ask about,
+        # and asking anyway is the behaviour this whole path exists to remove.
         order_result = seen.get("order")
+        mine = seen.get("orders")
+        if order_result is None and mine and len(mine.get("orders") or []) == 1:
+            only = mine["orders"][0]
+            return self._tool(
+                "order_lookup", {"order_id": only["order_id"], "email": ""}
+            )
+
         if order_result is None:
             order = _latest_first(ORDER_RE, latest, history)
             email = _latest_first(EMAIL_RE, latest, history)
@@ -459,6 +562,9 @@ class MockModel(Model):
                     "order_lookup",
                     {"order_id": f"ORD-{order.group(1)}", "email": email.group(0)},
                 )
+            if mine is None and "my_orders" in available and "my_orders" not in attempted:
+                # Ask the page before asking the person.
+                return self._tool("my_orders", {})
             return self._say(ASK_FOR_DETAILS)
 
         if order_result.get("outcome") != "found":

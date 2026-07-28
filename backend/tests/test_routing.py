@@ -111,6 +111,7 @@ class TestSpecialistsRunTheirTools:
         )
         assert {t.name for t in refunds.tools} == {
             "policy_retriever",
+            "my_orders",
             "order_lookup",
             "refund_processor",
             "human_escalation",

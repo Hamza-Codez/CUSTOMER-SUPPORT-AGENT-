@@ -12,6 +12,7 @@ which tenant's data a tool reads.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -20,6 +21,7 @@ from fastapi import Depends, Header, HTTPException, status
 
 from app.core.config import get_settings
 from app.core.security import read_token
+from app.core.storefront import StorefrontContext, read_context, read_declared
 from app.db import Store, get_store
 
 
@@ -47,6 +49,11 @@ class TenantContext:
 
     # Set when a real session token identified an account; None for demo tokens.
     user_email: str | None = None
+
+    # What the storefront says about the customer standing in front of it. Set
+    # only on the widget's path; None everywhere else. See app/core/storefront.py
+    # for why `verified` on it decides everything and the rest decides nothing.
+    storefront: StorefrontContext | None = None
 
     # --- run-scoped evidence ---------------------------------------------------
     # Names of tools that actually executed this run. Grounding is judged on this.
@@ -142,6 +149,8 @@ TenantDep = Annotated[TenantContext, Depends(require_tenant)]
 
 async def require_site_key(
     x_fte_site_key: Annotated[str | None, Header()] = None,
+    x_fte_customer_session: Annotated[str | None, Header()] = None,
+    x_fte_declared_context: Annotated[str | None, Header()] = None,
     origin: Annotated[str | None, Header()] = None,
     referer: Annotated[str | None, Header()] = None,
 ) -> TenantContext:
@@ -199,13 +208,36 @@ async def require_site_key(
             ),
         )
 
+    # What the page says about who is standing in front of it. A signed assertion
+    # is preferred and is the only kind that proves anything; a declared payload
+    # is accepted so a storefront with no backend still works, and is marked so
+    # nothing downstream can mistake it for proof.
+    #
+    # A *bad* signature is not downgraded to declared. Treating a forged token
+    # the same as an honest unsigned one would make the signature check
+    # decoration, so it is dropped entirely.
+    storefront: StorefrontContext | None = None
+    if x_fte_customer_session:
+        storefront, _reason = read_context(x_fte_customer_session, record.secret)
+    elif x_fte_declared_context:
+        try:
+            storefront = read_declared(json.loads(x_fte_declared_context))
+        except (TypeError, ValueError):
+            storefront = None
+
     return TenantContext(
         business_id=record.business_id,
         role="customer",
-        # Names the key, not a person: there is no person on the other end of a
-        # storefront widget, and pretending otherwise would make the audit log lie.
-        actor=f"site_key:{record.key[:12]}",
+        # Names the key, or the customer the storefront vouched for. An audit
+        # entry saying "site_key:pk_abc" when the storefront told us exactly who
+        # this was would be throwing away the best fact we have.
+        actor=(
+            f"customer:{storefront.customer_ref}"
+            if storefront and storefront.verified and storefront.customer_ref
+            else f"site_key:{record.key[:12]}"
+        ),
         store=store,
+        storefront=storefront,
     )
 
 

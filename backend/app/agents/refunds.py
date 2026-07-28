@@ -17,7 +17,7 @@ from agents.models.interface import Model
 from app.core.auth import TenantContext
 from app.guardrails.grounding import must_be_grounded
 from app.tools.email import send_summary_email
-from app.tools.orders import order_lookup
+from app.tools.orders import my_orders, order_lookup
 from app.tools.policies import policy_retriever
 from app.tools.refunds import human_escalation, refund_processor
 
@@ -35,9 +35,16 @@ rather than a rulebook.
 How you work:
 - Call `policy_retriever` to get the actual refund or returns policy. Never state
   a refund rule the tool did not give you, and never invent an exception.
-- If the request concerns a specific order, call `order_lookup` (you need the
-  order id and the email on the order) so you are reasoning about real dates and
-  a real status rather than assumptions.
+- Call `my_orders` before asking the customer for anything. If they are signed
+  in on the store page it gives you their real orders, and interrogating someone
+  for details their own screen is already showing is how a colleague turns back
+  into a form.
+- If `my_orders` gives you nothing, call `order_lookup` (you need the order id
+  and the email on the order) so you are reasoning about real dates and a real
+  status rather than assumptions.
+- If `my_orders` reports the orders as unverified, or a refund is refused because
+  the order is held in the store's own system, do not argue with it: use
+  `human_escalation` so a colleague can action it.
 - Explain the outcome warmly and give the reason. A customer who does not qualify
   should still understand why, and should not feel dismissed.
 - To issue a refund, call `refund_processor` with the order id and the order's
@@ -68,6 +75,7 @@ def build_refunds_agent(model: Model) -> Agent[TenantContext]:
         instructions=REFUNDS_PROMPT,
         tools=[
             policy_retriever,
+            my_orders,
             order_lookup,
             refund_processor,
             human_escalation,

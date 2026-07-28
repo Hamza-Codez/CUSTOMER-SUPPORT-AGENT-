@@ -691,7 +691,8 @@ class PostgresStore(Store):
     # --- site keys ----------------------------------------------------------------
 
     _SITE_KEY_COLS = """
-        key, business_id, label, allowed_origins, preview, created_at, revoked_at
+        key, business_id, secret, label, allowed_origins, preview, created_at,
+        revoked_at
     """
 
     @staticmethod
@@ -699,6 +700,7 @@ class PostgresStore(Store):
         return SiteKeyRecord(
             key=row["key"],
             business_id=row["business_id"],
+            secret=row["secret"],
             label=row["label"],
             # asyncpg gives back a list for text[]; a NULL column would give None.
             allowed_origins=list(row["allowed_origins"] or []),
@@ -712,10 +714,11 @@ class PostgresStore(Store):
             await conn.execute(
                 f"""
                 insert into fte.site_keys ({self._SITE_KEY_COLS})
-                values ($1, $2, $3, $4, $5, $6, $7)
+                values ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
                 record.key,
                 record.business_id,
+                record.secret,
                 record.label,
                 record.allowed_origins,
                 record.preview,

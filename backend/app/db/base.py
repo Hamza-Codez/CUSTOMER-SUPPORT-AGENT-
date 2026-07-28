@@ -180,6 +180,15 @@ class SiteKeyRecord:
 
     key: str
     business_id: str
+    # The signing secret for storefront assertions. Never leaves the seller's
+    # server: it is what lets *their* backend vouch for a logged-in customer, so
+    # the widget can skip the email challenge without trusting the browser.
+    #
+    # Stored rather than hashed, because verifying an HMAC needs the same secret
+    # that produced it. It is therefore genuinely sensitive at rest, and it is
+    # returned by the API only at creation and from one operator-only endpoint —
+    # never from the list, which the integrations page renders.
+    secret: str = ""
     label: str = ""
     # Origins (scheme://host[:port]) permitted to use this key. Empty means the
     # key has not been locked down yet — allowed only while `preview` is true.

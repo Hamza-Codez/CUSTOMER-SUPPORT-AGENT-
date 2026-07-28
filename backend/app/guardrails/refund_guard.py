@@ -82,6 +82,21 @@ async def refund_precheck(data: ToolInputGuardrailData) -> ToolGuardrailFunction
 
     record = await tenant.store.get_order(tenant.business_id, order_id)
     if record is None:
+        # The storefront vouched for this order but we have never held it — the
+        # seller keeps their own order data. We can discuss it and we can check
+        # the policy against it, but we hold no payment record to refund against,
+        # so this is a person's decision rather than a missing order.
+        front = tenant.storefront
+        if front is not None and front.verified and front.order(order_id) is not None:
+            return ToolGuardrailFunctionOutput.reject_content(
+                message=(
+                    f"Refund blocked: order {order_id} is held in the store's own "
+                    "system, not ours, so there is nothing here to refund against. "
+                    "Use human_escalation so a colleague can action it, and tell "
+                    "the customer it is with a person."
+                ),
+                output_info={"reason": "order_not_ours", "order_id": order_id},
+            )
         return ToolGuardrailFunctionOutput.reject_content(
             message=f"Refund blocked: no order {order_id} exists on this account.",
             output_info={"reason": "order_not_found", "order_id": order_id},
