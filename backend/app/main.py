@@ -86,6 +86,7 @@ from app.schemas import (
     PolicySummary,
     ProductSummary,
     ScannedPageView,
+    ServiceInfo,
     SignupRequest,
     SiteKeyCreate,
     SiteKeyList,
@@ -238,6 +239,27 @@ async def feedback_summary(
             round(sum(r.rating for r in rows) / len(rows), 2) if rows else None
         ),
         ratings=ratings,
+    )
+
+
+@app.get("/", response_model=ServiceInfo)
+async def root() -> ServiceInfo:
+    """What this is, for anyone who lands on the bare domain.
+
+    Added because the first thing you do after deploying is open the URL, and
+    a bare FastAPI app answers `{"detail":"Not Found"}` there — which reads as a
+    broken deployment when in fact the routing worked perfectly. A deployment
+    check should be able to confirm success by looking at it.
+
+    Deliberately says nothing configuration-specific: this is a public,
+    unauthenticated endpoint, so it names the service and where to go next, and
+    leaves provider, store and database state to /health.
+    """
+    return ServiceInfo(
+        service="Digital FTE — Agent Platform",
+        version=app.version,
+        docs="/docs",
+        health="/health",
     )
 
 
