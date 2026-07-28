@@ -261,11 +261,12 @@ Storefront context, probed live on 2026-07-28 against real PostgreSQL:
 | Signing secret round-trips through `text` and the additive migration | pass |
 | `/widget.js` parses under `node --check` | pass |
 
-**Not verified: a real seller's signing implementation.** The reference signer is
-`sign_context` in `app/core/storefront.py`, and the verifier is tested against
-it. Nobody has yet signed an assertion from a Node runtime, so "your route
-handler's HS256 output verifies here" is expected rather than proven — it is
-plain JWT, but that is an expectation, not a measurement.
+**Verified: a Node-signed assertion.** A dependency-free signer built on
+`node:crypto` (`createHmac("sha256")`, base64url) produced a 645-character token
+that `read_context` accepted — customer, orders, tracking, ETA and cart all
+intact — and rejected as `invalid signature` under a different secret. So a
+seller's own route handler signing with HS256 interoperates, measured rather
+than assumed.
 
 **Not verified: the widget inside a real storefront.** `/widget.js` is served,
 its endpoint is exercised, and the script is checked for the things that would
