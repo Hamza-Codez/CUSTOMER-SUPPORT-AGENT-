@@ -92,6 +92,7 @@ from app.schemas import (
     SiteKeyView,
     SiteScanRequest,
     SiteScanResult,
+    WidgetConfig,
 )
 
 log = logging.getLogger("fte")
@@ -396,6 +397,20 @@ async def load_verified_identity(tenant: TenantContext) -> None:
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, tenant: TenantDep) -> ChatResponse:
     return await _run_turn(req, tenant)
+
+
+@app.get("/widget/config", response_model=WidgetConfig)
+async def widget_config(tenant: SiteKeyDep) -> WidgetConfig:
+    """Who the widget is working for.
+
+    Same credential and same origin check as the chat endpoint — this is the
+    widget asking about the store it was embedded on, and only a key issued for
+    that store can ask.
+    """
+    name = await tenant.store.get_business_name(tenant.business_id)
+    return WidgetConfig(
+        business_name=name or get_settings().business_display_name
+    )
 
 
 @app.post("/chat/public", response_model=ChatResponse)

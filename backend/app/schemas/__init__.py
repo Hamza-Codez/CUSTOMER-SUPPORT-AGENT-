@@ -336,6 +336,21 @@ class SiteKeyList(BaseModel):
     keys: list[SiteKeyView]
 
 
+class WidgetConfig(BaseModel):
+    """What the widget needs to know about the store it is sitting on.
+
+    It exists because `/widget.js` is one static file served to every tenant, so
+    it cannot be told at build time whose store it is on — baking a name in meant
+    every seller's widget was headed with the demo store's name. The key is the
+    only thing that identifies the tenant, and only the key holder can ask.
+
+    Nothing sensitive belongs here: this is readable by anyone who can read the
+    seller's page source, which is everyone.
+    """
+
+    business_name: str
+
+
 # --- HTTP contract: integrations ----------------------------------------------
 
 

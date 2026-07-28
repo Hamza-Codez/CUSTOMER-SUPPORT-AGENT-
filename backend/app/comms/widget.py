@@ -214,9 +214,30 @@ _TEMPLATE = r"""
     var hd = document.createElement("div");
     hd.className = "hd";
     var title = document.createElement("b");
-    text(title, "__BUSINESS__");
+    /* Starts generic and is corrected the moment the store identifies itself.
+       This file is one static script served to every tenant, so a name compiled
+       into it is necessarily the wrong name for all but one of them — which is
+       exactly what happened: every seller's widget was headed "Aeron Home
+       Goods", the demo store. Only the key knows whose site this is. */
+    text(title, "Support");
     var sub = document.createElement("small");
-    text(sub, "Support");
+
+    fetch(API + "/widget/config", { headers: { "X-FTE-Site-Key": KEY } })
+      .then(function (r) {
+        return r.ok ? r.json() : null;
+      })
+      .then(function (cfg) {
+        if (cfg && cfg.business_name) {
+          title.textContent = "";
+          text(title, cfg.business_name);
+          sub.textContent = "";
+          text(sub, "Support");
+        }
+      })
+      .catch(function () {
+        /* The header is cosmetic. A store that cannot be named still answers
+           questions, so this must never block the conversation. */
+      });
     var close = document.createElement("button");
     close.className = "x";
     close.type = "button";
@@ -273,14 +294,12 @@ _TEMPLATE = r"""
 
 
 def render_widget_js() -> str:
-    """The widget source, with this deployment's API base baked in."""
-    settings = get_settings()
-    return (
-        _TEMPLATE.replace("__API_BASE__", settings.public_base_url.rstrip("/"))
-        # Escaped for a JS string literal even though it comes from our own
-        # config: a business name with a quote in it should not break the file.
-        .replace(
-            "__BUSINESS__",
-            settings.business_display_name.replace("\\", "\\\\").replace('"', '\\"'),
-        )
+    """The widget source, with this deployment's API base baked in.
+
+    The API base is the only thing substituted, and it is the only thing that
+    *can* be: this response is identical for every tenant, so anything
+    store-specific has to be fetched at runtime against the key.
+    """
+    return _TEMPLATE.replace(
+        "__API_BASE__", get_settings().public_base_url.rstrip("/")
     )

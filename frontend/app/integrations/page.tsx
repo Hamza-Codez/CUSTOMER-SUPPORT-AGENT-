@@ -188,6 +188,10 @@ function WidgetMethod() {
   }
 
   const live = (keys ?? []).filter((k) => k.active && !k.preview);
+  // Shown, not hidden. A revoked key disappearing from this page is why a dead
+  // key sitting in a live site's HTML is invisible: the widget says "revoked"
+  // and the page shows nothing that could be.
+  const revoked = (keys ?? []).filter((k) => !k.active && !k.preview);
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
@@ -264,7 +268,40 @@ function WidgetMethod() {
                 {busy ? "Creating…" : "Create key"}
               </Button>
             </form>
+            <p className="mt-2 text-[12px] leading-relaxed text-faint">
+              Include <code className="text-accent-soft">http://</code> or{" "}
+              <code className="text-accent-soft">https://</code>, and the port if
+              there is one. The match is exact —{" "}
+              <code className="text-accent-soft">localhost:3000</code> is stored
+              as <code className="text-accent-soft">https://</code>, which will
+              not match a browser sending{" "}
+              <code className="text-accent-soft">http://</code>.
+            </p>
             {error && <p className="mt-2 text-[12px] text-alert">{error}</p>}
+
+            {revoked.length > 0 && (
+              <details className="mt-5 text-[12px] text-faint">
+                <summary className="cursor-pointer">
+                  {revoked.length} revoked key
+                  {revoked.length === 1 ? "" : "s"}
+                </summary>
+                <p className="mt-2 leading-relaxed">
+                  If your site still shows &ldquo;this site key has been
+                  revoked&rdquo;, one of these is the key in your script tag.
+                  Replace it with a live one above.
+                </p>
+                <ul className="mt-2 flex flex-col gap-1">
+                  {revoked.map((key) => (
+                    <li key={key.key} className="break-all font-mono">
+                      {key.key}
+                      {key.label && (
+                        <span className="font-sans"> — {key.label}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </>
         )}
 

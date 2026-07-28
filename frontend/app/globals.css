@@ -134,6 +134,10 @@ body {
     scrollbar-width: thin;
     scrollbar-color: var(--color-line) transparent;
   }
+  
+  button:hover {
+    cursor: pointer;
+  }
 }
 
 /* --- surfaces -------------------------------------------------------------*/

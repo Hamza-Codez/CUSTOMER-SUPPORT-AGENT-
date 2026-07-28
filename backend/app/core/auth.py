@@ -164,10 +164,25 @@ async def require_site_key(
 
     store = get_store()
     record = await store.get_site_key(x_fte_site_key.strip())
-    if record is None or not record.active:
+
+    # Two different problems with two different fixes, so they get two different
+    # messages. "Unknown or revoked" sent a seller hunting for the wrong thing:
+    # their key was fine, it had simply been replaced by one for another account.
+    if record is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unknown or revoked site key.",
+            detail=(
+                "Unknown site key. Check the data-fte-key on your script tag "
+                "matches a key issued to the account you are signed in as."
+            ),
+        )
+    if not record.active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=(
+                "This site key has been revoked. Create a new one and update the "
+                "script tag on your site."
+            ),
         )
 
     # Browsers send Origin on cross-origin POSTs. Referer is the fallback for the

@@ -165,6 +165,25 @@ class TestPublicChat:
             headers={"X-FTE-Site-Key": "pk_not_a_real_key", "Origin": STORE_ORIGIN},
         )
         assert r.status_code == 401
+        assert "Unknown site key" in r.json()["detail"]
+
+    def test_a_revoked_key_says_so(self, client):
+        """Two problems, two fixes, so two messages.
+
+        A single "unknown or revoked" sent a seller hunting for a key that was
+        never the issue — theirs had simply been revoked and needed replacing.
+        """
+        key = mint(client)["key"]
+        client.delete(f"/site-keys/{key}", headers=OPS)
+        r = client.post(
+            "/chat/public",
+            json={"message": "hi", "session_id": "pub-9"},
+            headers={"X-FTE-Site-Key": key, "Origin": STORE_ORIGIN},
+        )
+        assert r.status_code == 401
+        detail = r.json()["detail"]
+        assert "revoked" in detail
+        assert "Create a new one" in detail
 
     def test_a_missing_key_is_refused(self, client):
         r = client.post(
@@ -198,6 +217,40 @@ class TestTheKeyCannotEscalateItself:
             headers={"X-FTE-Site-Key": key},
         )
         assert r.status_code == 401
+
+
+class TestWidgetConfig:
+    """The widget asking whose store it is on.
+
+    /widget.js is one static file served to every tenant, so a name compiled
+    into it is the wrong name for all but one of them. It was the demo store's,
+    which is what a seller saw at the top of their own widget.
+    """
+
+    def test_it_names_the_store_the_key_belongs_to(self, client):
+        key = mint(client)["key"]
+        r = client.get(
+            "/widget/config",
+            headers={"X-FTE-Site-Key": key, "Origin": STORE_ORIGIN},
+        )
+        assert r.status_code == 200
+        assert r.json()["business_name"] == "Aeron Home Goods"
+
+    def test_it_needs_a_key(self, client):
+        assert client.get("/widget/config").status_code == 401
+
+    def test_it_enforces_the_origin(self, client):
+        key = mint(client)["key"]
+        r = client.get(
+            "/widget/config",
+            headers={"X-FTE-Site-Key": key, "Origin": "https://evil.example"},
+        )
+        assert r.status_code == 403
+
+    def test_the_script_no_longer_hardcodes_a_store_name(self, client):
+        body = client.get("/widget.js").text
+        assert "Aeron Home Goods" not in body
+        assert "/widget/config" in body
 
 
 class TestWidgetScript:
