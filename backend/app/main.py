@@ -105,6 +105,22 @@ UNGROUNDED_REPLY = (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+
+    # Checked at startup rather than at the first request, so a misconfigured
+    # deployment fails on deploy instead of looking healthy and quietly answering
+    # from a lookup table. Every item is something that would otherwise *work*,
+    # which is exactly why it has to be refused out loud.
+    problems = settings.deployment_problems()
+    if problems:
+        listed = "\n".join(f"  - {p}" for p in problems)
+        raise RuntimeError(
+            f"ENVIRONMENT=production, but this configuration is not deployable:\n"
+            f"{listed}\n"
+            "Fix these, or set ENVIRONMENT=development to run with the zero-setup "
+            "defaults."
+        )
+
     store = get_store()
     await store.connect()
     try:
@@ -120,10 +136,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Open in dev. Tighten `allow_origins` before this is exposed anywhere real.
+# `*` in development; an explicit list in production, which `deployment_problems`
+# enforces. The site key already scopes the widget to its own origins, but the
+# dashboard routes are plain bearer-token endpoints and should not be callable
+# from any page on the internet.
+#
+# `allow_credentials` stays False: nothing here authenticates with cookies, and
+# leaving it False is what permits a wildcard origin to be legal at all.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_settings().cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

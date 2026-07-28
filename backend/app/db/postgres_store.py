@@ -14,6 +14,7 @@ from typing import Any
 
 import asyncpg
 
+from app.core.config import get_settings
 from app.db.base import (
     AuditEntry,
     EmailRecord,
@@ -125,17 +126,36 @@ class PostgresStore(Store):
         )
 
     async def connect(self) -> None:
-        if self._pool is None:
-            self._pool = await asyncpg.create_pool(
-                self._dsn,
-                min_size=1,
-                max_size=5,
-                init=self._init_connection,
-                # Our tables live in the `fte` schema, never `public` — the target
-                # database may host unrelated projects with colliding table names.
-                # Every unqualified identifier below resolves here first.
-                server_settings={"search_path": "fte,public"},
-            )
+        if self._pool is not None:
+            return
+
+        settings = get_settings()
+
+        # A *transaction* pooler (Supabase 6543, pgBouncer, pgcat) hands a
+        # different server connection to each transaction, so a statement
+        # prepared on one is absent on the next. asyncpg caches prepared
+        # statements by default, which turns that into intermittent
+        # "prepared statement _asyncpg_stmt_N does not exist" under concurrency —
+        # a failure that never appears in testing and only ever appears in
+        # production, because it needs two clients sharing a backend.
+        extra: dict[str, Any] = {}
+        if settings.db_transaction_pooler:
+            extra["statement_cache_size"] = 0
+
+        self._pool = await asyncpg.create_pool(
+            self._dsn,
+            # Sized from config because the right answer differs by an order of
+            # magnitude between one long-lived server and fifty serverless
+            # instances waking at once.
+            min_size=settings.db_pool_min,
+            max_size=settings.db_pool_max,
+            init=self._init_connection,
+            # Our tables live in the `fte` schema, never `public` — the target
+            # database may host unrelated projects with colliding table names.
+            # Every unqualified identifier below resolves here first.
+            server_settings={"search_path": "fte,public"},
+            **extra,
+        )
 
     async def close(self) -> None:
         if self._pool is not None:

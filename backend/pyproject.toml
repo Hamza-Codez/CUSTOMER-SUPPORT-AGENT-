@@ -12,6 +12,10 @@ dependencies = [
     "asyncpg>=0.30",
     # EmailStr validation; hand-rolled email regexes are a classic own goal.
     "email-validator>=2.2",
+    # Session tokens and storefront assertions. Declared because we import it:
+    # it was arriving transitively through openai-agents, so the day that
+    # dependency tree shifted, auth would have broken with an ImportError.
+    "pyjwt>=2.9",
 ]
 
 [dependency-groups]

@@ -85,7 +85,7 @@ def issue_token(*, user_id: str, business_id: str, role: str, email: str) -> str
             "iat": now,
             "exp": now + TOKEN_TTL,
         },
-        settings.jwt_secret,
+        settings.signing_key,
         algorithm=JWT_ALGORITHM,
     )
 
@@ -94,7 +94,7 @@ def read_token(token: str) -> dict[str, Any] | None:
     """Decode a session token, or None if it is invalid, expired or not ours."""
     try:
         return jwt.decode(
-            token, get_settings().jwt_secret, algorithms=[JWT_ALGORITHM]
+            token, get_settings().signing_key, algorithms=[JWT_ALGORITHM]
         )
     except jwt.PyJWTError:
         return None

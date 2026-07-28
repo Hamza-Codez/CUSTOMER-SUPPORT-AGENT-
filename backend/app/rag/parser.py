@@ -83,8 +83,18 @@ def parse_markdown(content: str, doc_name: str) -> list[ParsedPassage]:
 
 
 def parse_directory(directory: Path | None = None) -> list[ParsedPassage]:
-    """Parse every markdown document in the knowledge directory, name-ordered."""
+    """Parse every markdown document in the knowledge directory, name-ordered.
+
+    A missing directory yields nothing rather than raising. This runs at import
+    time to build the in-memory store's seed rows, so on a deployment that ships
+    only the code — no demo documents — an exception here would take down the
+    whole application at startup over content production does not use. A real
+    tenant's policies live in the database.
+    """
     root = directory or KNOWLEDGE_DIR
+    if not root.is_dir():
+        return []
+
     passages: list[ParsedPassage] = []
     for path in sorted(root.glob("*.md")):
         passages.extend(
