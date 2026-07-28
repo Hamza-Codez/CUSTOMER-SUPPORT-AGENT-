@@ -54,7 +54,7 @@ def payload(**overrides) -> dict:
     body = {
         "customer": {
             "ref": "cus_9001",
-            "name": "Hamza Sajid",
+            "name": "Robin Alvarez",
             "email": REFUNDABLE_EMAIL,
         },
         "orders": [
@@ -95,7 +95,7 @@ class TestSigning:
         assert reason == ""
         assert context is not None
         assert context.verified is True
-        assert context.customer_name == "Hamza Sajid"
+        assert context.customer_name == "Robin Alvarez"
         assert context.order_ids() == [REFUNDABLE]
 
     def test_another_key_cannot_verify_it(self, key):
@@ -158,7 +158,7 @@ class TestTheWidgetSession:
     ):
         body = client.get("/widget/session", headers=attested(key)).json()
         assert body["verified"] is True
-        assert body["customer_name"] == "Hamza Sajid"
+        assert body["customer_name"] == "Robin Alvarez"
         # Our own records for this customer, which include but are not limited
         # to the one the page happened to be displaying.
         assert REFUNDABLE in [o["order_id"] for o in body["orders"]]
@@ -216,7 +216,7 @@ class TestNoInterrogation:
             json={"message": "where is my order?", "session_id": "sf-2"},
             headers=attested(key),
         ).json()
-        assert "Hamza" in body["reply"]
+        assert "Robin" in body["reply"]
 
     def test_an_anonymous_visitor_is_still_asked(self, client, key):
         """The fallback has to keep working, or every guest checkout breaks."""

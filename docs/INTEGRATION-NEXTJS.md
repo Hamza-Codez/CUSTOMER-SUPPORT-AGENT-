@@ -190,7 +190,7 @@ Skip step 3 and publish the context unsigned:
 ```tsx
 <Script id="fte-context" strategy="afterInteractive">
   {`window.fteContext = ${JSON.stringify({
-    customer: { name: "Hamza" },
+    customer: { name: "Robin" },
     orders: [{ order_id: "JC-20260728-8VVK", status: "in_transit", total: "$666.85" }],
     cart: [{ name: "Ceramic Kettle", qty: 1, price: "$89.00" }],
   })};`}
