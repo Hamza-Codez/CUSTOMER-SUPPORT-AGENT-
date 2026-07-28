@@ -20,6 +20,17 @@ from app.core.config import _DEMO_TOKENS, Settings
 
 PROD = {"environment": "production"}
 
+
+@pytest.fixture
+def client(store):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        yield c
+
+
 # The minimum that is actually deployable, used as the base for the negative
 # cases so each one isolates a single problem.
 DEPLOYABLE = {
@@ -189,3 +200,27 @@ class TestStartupRefusal:
             assert "ENVIRONMENT=development" in message  # the way out
         finally:
             get_settings.cache_clear()
+
+
+class TestTheBareDomain:
+    """What someone sees when they open the deployed URL.
+
+    A FastAPI app with no root route answers `{"detail":"Not Found"}` there,
+    which reads as a broken deployment when in fact the routing worked — it was
+    the first thing seen after the first deploy.
+    """
+
+    def test_the_root_is_not_a_404(self, client):
+        assert client.get("/").status_code == 200
+
+    def test_it_points_at_what_to_check_next(self, client):
+        body = client.get("/").json()
+        assert body["health"] == "/health"
+        assert body["docs"] == "/docs"
+        assert body["service"]
+        assert body["version"]
+
+    def test_it_reveals_nothing_about_the_configuration(self, client):
+        """Public and unauthenticated. Provider and store belong to /health."""
+        body = client.get("/").json()
+        assert set(body) == {"service", "version", "docs", "health"}

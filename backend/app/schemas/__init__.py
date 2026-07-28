@@ -40,6 +40,21 @@ class ChatResponse(BaseModel):
 # --- HTTP contract: GET /health ----------------------------------------------
 
 
+class ServiceInfo(BaseModel):
+    """The bare-domain response.
+
+    Public and unauthenticated, so it names the service and points at what to
+    read next — and nothing about how this instance is configured. Provider,
+    store and database state belong to /health, which is equally public but at
+    least is not the first thing a stranger sees.
+    """
+
+    service: str
+    version: str
+    docs: str
+    health: str
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     provider: Literal["mock", "gemini"]

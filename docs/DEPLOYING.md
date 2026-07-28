@@ -142,6 +142,16 @@ uv export --no-dev --no-hashes --no-emit-project --format requirements-txt -o re
 
 ### 5. Check it
 
+Open the bare URL first. It answers:
+
+```json
+{"service":"Digital FTE — Agent Platform","version":"0.3.0","docs":"/docs","health":"/health"}
+```
+
+If you instead see `{"detail":"Not Found"}`, that is FastAPI's own 404 rather
+than Vercel's HTML one — which means the rewrite worked and the app is running,
+you have simply hit a path it does not serve. Check `/health`.
+
 ```bash
 curl -s https://your-api.vercel.app/health
 # {"status":"ok","provider":"gemini","store":"postgres","db":"up"}
@@ -171,14 +181,14 @@ Probed locally on 2026-07-28 against the real Supabase database:
 
 | What | Result |
 |---|---|
-| `api/index.py` imports and serves as an ASGI app | 27 routes, `/health` 200 |
+| `api/index.py` imports and serves as an ASGI app | 28 routes, `/` and `/health` 200 |
 | Boot under a full production config | starts, `provider=gemini store=postgres` |
 | `DB_TRANSACTION_POOLER=true` against a live server | accepted |
 | `ops-token` on the operator queue in production | **401** |
 | CORS preflight from an unlisted origin | **400** |
 | CORS preflight from a listed origin | 200, origin echoed |
 | `widget.js` carries `PUBLIC_BASE_URL`, not localhost | confirmed |
-| Guard lists every problem at once | 443 tests, 20 of them this |
+| Guard lists every problem at once | 446 tests, 23 of them this |
 
 ## Not verified
 
