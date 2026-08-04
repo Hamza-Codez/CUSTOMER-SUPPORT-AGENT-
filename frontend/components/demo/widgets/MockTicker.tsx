@@ -4,7 +4,8 @@ import { cn } from "@/lib/utils";
 export function MockTicker({ className }: { className?: string }) {
   return (
     <div className={cn("overflow-hidden w-full min-w-0 border-b border-line-soft bg-ink text-[11px] font-mono whitespace-nowrap py-1.5 flex items-center", className)}>
-      <div className="animate-[ticker_30s_linear_infinite] flex gap-8">
+      <div className="mx-auto max-w-7xl w-full min-w-0 overflow-hidden">
+        <div className="animate-[ticker_30s_linear_infinite] flex gap-8">
         {[...Array(3)].map((_, i) => (
           <React.Fragment key={i}>
             <span className="text-muted"><span className="text-ok">↑</span> ACTIVE_CHATS: <span className="text-fg">142</span></span>
@@ -23,6 +24,7 @@ export function MockTicker({ className }: { className?: string }) {
           100% { transform: translateX(-32.33%); }
         }
       `}} />
+      </div>
     </div>
   );
 }

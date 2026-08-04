@@ -25,6 +25,8 @@ export type Step = {
   action: string;
   /** Shown when the step is complete, before they move on. */
   done?: string;
+  /** Which tools to light up green when this step is performed (useful for frontend-only mode). */
+  tools?: import("../../lib/tools").ToolId[];
 };
 
 export const STEPS: Step[] = [
@@ -37,6 +39,7 @@ export const STEPS: Step[] = [
     action: "Say hello",
     send: "Hi — what can you help me with?",
     done: "It offered what it can actually do, rather than promising everything.",
+    tools: ["route"],
   },
   {
     id: "identity",
@@ -47,6 +50,7 @@ export const STEPS: Step[] = [
     action: "Ask without verifying",
     send: "Where is my order ORD-1002?",
     done: "No status, no carrier, no tracking — it asked for the email first.",
+    tools: ["order_lookup"],
   },
   {
     id: "lookup",
@@ -57,6 +61,7 @@ export const STEPS: Step[] = [
     action: "Verify and look up",
     send: "It's ORD-1002, and my email is ayesha.k@example.com",
     done: "The chip under the reply is proof a tool ran. It cannot appear otherwise.",
+    tools: ["order_lookup"],
   },
   {
     id: "products",
@@ -67,6 +72,7 @@ export const STEPS: Step[] = [
     action: "Compare two products",
     send: "Which is better, the AeroDesk Pro or the AeroDesk Lite?",
     done: "Both products came from the catalogue, with the differences that matter.",
+    tools: ["product_catalog"],
   },
   {
     id: "refund-ok",
@@ -77,6 +83,7 @@ export const STEPS: Step[] = [
     action: "Request a small refund",
     send: "I'd like a refund for ORD-1005, my email is ayesha.k@example.com",
     done: "Refunded on the spot — under the cap and inside the window.",
+    tools: ["policy_retriever", "refund_processor"],
   },
   {
     id: "refund-human",
@@ -87,6 +94,7 @@ export const STEPS: Step[] = [
     action: "Request a larger refund",
     send: "Actually I also want a refund for ORD-1001, same email ayesha.k@example.com",
     done: "No money moved. It has been handed to a person — let's go and be that person.",
+    tools: ["refund_processor", "human_escalation"],
   },
   {
     id: "decision",
@@ -106,6 +114,7 @@ export const STEPS: Step[] = [
     action: "Ask for it in writing",
     send: "Great — can you email me a summary?",
     done: "That is the real message, rendered exactly as it was stored.",
+    tools: ["send_summary_email"],
   },
   {
     id: "ops",

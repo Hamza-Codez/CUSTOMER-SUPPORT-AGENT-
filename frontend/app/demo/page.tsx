@@ -145,6 +145,14 @@ export default function DemoPage() {
   async function performStep() {
     setError(null);
 
+    if (step.tools) {
+      setUsed((prev) => {
+        const next = new Set(prev);
+        for (const tool of step.tools!) next.add(tool);
+        return next;
+      });
+    }
+
     if (step.send) {
       setBusy(true);
       chat.current?.send(step.send);
@@ -204,14 +212,14 @@ export default function DemoPage() {
   return (
     <div className="flex h-dvh flex-col bg-ink">
       <header className="border-b border-line bg-surface/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3 sm:px-6">
+        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3 sm:px-6">
           <Wordmark />
 
           <SideToggle side={side} onChange={setSide} />
         </div>
       </header>
 
-      <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="mx-auto flex w-full max-w-7xl min-w-0 min-h-0 flex-1 flex-col lg:flex-row">
         {/* The stage — always the real component, never a mock-up. */}
         <section className="flex min-w-0 min-h-0 flex-1 flex-col border-line lg:border-r">
           {side === "customer" ? (
