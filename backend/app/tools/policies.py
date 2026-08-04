@@ -40,7 +40,7 @@ async def policy_retriever(
     tenant.note_tool("policy_retriever")
 
     hits = await retrieve_policies(
-        tenant.store, tenant.business_id, question, limit=MAX_PASSAGES
+        tenant.adapter, tenant.business_id, question, limit=MAX_PASSAGES
     )
     matches = [h.record for h in hits]
 

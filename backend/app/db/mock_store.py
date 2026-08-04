@@ -27,6 +27,7 @@ from app.db.base import (
     UsageSummary,
     UserRecord,
     VerificationRecord,
+    ProfileRecord,
 )
 from app.rag.parser import parse_directory
 
@@ -264,7 +265,8 @@ class MockStore(Store):
         self._emails: dict[tuple[str, str], EmailRecord] = {}
         self._feedback: dict[str, FeedbackRecord] = {}
         self._verifications: dict[tuple[str, str, str], VerificationRecord] = {}
-        self._integrations: list[IntegrationRequest] = []
+        self._users: dict[str, UserRecord] = {}
+        self._profiles: dict[str, ProfileRecord] = {}
         self._site_keys: dict[str, SiteKeyRecord] = {}
         self._usage: list[UsageRecord] = []
         self._businesses: dict[str, str] = {"biz_demo": "Aeron Home Goods",
@@ -454,6 +456,17 @@ class MockStore(Store):
 
     async def create_business(self, business_id: str, name: str) -> None:
         self._businesses[business_id] = name
+        
+    async def update_business_name(self, business_id: str, name: str) -> None:
+        if business_id in self._businesses:
+            self._businesses[business_id] = name
+
+    async def save_profile(self, profile: ProfileRecord) -> None:
+        self._profiles[profile.user_id] = profile
+
+    async def is_profile_completed(self, user_id: str) -> bool:
+        prof = self._profiles.get(user_id)
+        return prof is not None and prof.status == "completed"
 
     async def create_user(self, record: UserRecord) -> bool:
         if record.email.casefold() in self._users:

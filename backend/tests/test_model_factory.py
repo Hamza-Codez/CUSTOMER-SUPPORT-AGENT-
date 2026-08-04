@@ -2,58 +2,87 @@
 
 The factory is the swappable seam for the riskiest dependency, so its failure
 modes need to be loud and specific rather than a generic crash at request time.
+
+LIGHTRON runs two tiers — reasoning decides, voice speaks — and both are on Groq.
+Gemini keeps embeddings only, because its 20-requests-a-day free tier cannot be
+the path a real customer's question takes.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from agents import OpenAIChatCompletionsModel
+
 from app.core.config import Settings, get_settings
-from app.core.model import gemini_model
 from app.core.mock_model import MockModel
+from app.core.model import reasoning_model, voice_model
 
 
-def test_defaults_to_mock_so_the_app_boots_unconfigured(monkeypatch):
-    monkeypatch.setenv("MODEL_PROVIDER", "mock")
+def _reset(monkeypatch, **env):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     get_settings.cache_clear()
-    gemini_model.cache_clear()
-    assert isinstance(gemini_model(), MockModel)
+    reasoning_model.cache_clear()
+    voice_model.cache_clear()
 
 
-def test_gemini_without_a_key_fails_with_a_clear_message(monkeypatch):
-    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
-    monkeypatch.setenv("GEMINI_API_KEY", "")
-    get_settings.cache_clear()
-    gemini_model.cache_clear()
+class TestTheMockPath:
+    """Still available, never the shipped answer path.
 
-    with pytest.raises(ValueError, match="GEMINI_API_KEY is empty"):
-        gemini_model()
+    `ENVIRONMENT=production` refuses to start on it; it exists so the repo boots
+    unconfigured and so tool wiring can be exercised without spending a request.
+    """
 
-
-def test_gemini_with_a_key_builds_a_chat_completions_model(monkeypatch):
-    from agents import OpenAIChatCompletionsModel
-
-    monkeypatch.setenv("MODEL_PROVIDER", "gemini")
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-flash-latest")
-    get_settings.cache_clear()
-    gemini_model.cache_clear()
-
-    model = gemini_model()
-    assert isinstance(model, OpenAIChatCompletionsModel)
+    def test_both_tiers_default_to_mock_so_the_app_boots_unconfigured(
+        self, monkeypatch
+    ):
+        _reset(monkeypatch, MODEL_PROVIDER="mock")
+        assert isinstance(reasoning_model(), MockModel)
+        assert isinstance(voice_model(), MockModel)
 
 
-def test_unknown_provider_is_rejected(monkeypatch):
-    monkeypatch.setenv("MODEL_PROVIDER", "mock")
-    get_settings.cache_clear()
-    gemini_model.cache_clear()
+class TestTheGroqTiers:
+    def test_reasoning_without_a_key_says_which_key(self, monkeypatch):
+        _reset(monkeypatch, MODEL_PROVIDER="gemini", GROQ_API_KEY="")
+        with pytest.raises(ValueError, match="GROQ_API_KEY is empty"):
+            reasoning_model()
 
-    # Bypass the Literal validation to prove the factory itself guards the value.
-    settings = get_settings()
-    object.__setattr__(settings, "model_provider", "llama")
-    gemini_model.cache_clear()
-    with pytest.raises(ValueError, match="Unknown MODEL_PROVIDER"):
-        gemini_model()
+    def test_voice_without_a_key_says_which_key(self, monkeypatch):
+        _reset(monkeypatch, MODEL_PROVIDER="gemini", GROQ_API_KEY="")
+        with pytest.raises(ValueError, match="GROQ_API_KEY is empty"):
+            voice_model()
+
+    def test_both_tiers_build_against_groq(self, monkeypatch):
+        _reset(monkeypatch, MODEL_PROVIDER="gemini", GROQ_API_KEY="test-key-not-real")
+        assert isinstance(reasoning_model(), OpenAIChatCompletionsModel)
+        assert isinstance(voice_model(), OpenAIChatCompletionsModel)
+
+    def test_the_tiers_can_run_different_models(self, monkeypatch):
+        """The reason they are separate factories.
+
+        Changing how the product *sounds* must not require touching how it
+        *thinks*.
+        """
+        _reset(
+            monkeypatch,
+            MODEL_PROVIDER="gemini",
+            GROQ_API_KEY="test-key-not-real",
+            GROQ_REASONING_MODEL="reasoning-model-id",
+            GROQ_VOICE_MODEL="voice-model-id",
+        )
+        assert reasoning_model().model == "reasoning-model-id"
+        assert voice_model().model == "voice-model-id"
+
+    def test_model_ids_are_configuration_not_code(self):
+        """Groq retires model IDs without notice, so neither is pinned in code."""
+        settings = Settings(
+            groq_reasoning_model="something-new",
+            groq_voice_model="something-else",
+            _env_file=None,
+        )
+        assert settings.groq_reasoning_model == "something-new"
+        assert settings.groq_voice_model == "something-else"
 
 
 class TestStoreSelection:

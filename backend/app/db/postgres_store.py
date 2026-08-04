@@ -661,17 +661,60 @@ class PostgresStore(Store):
                 name,
             )
 
+    async def update_business_name(self, business_id: str, name: str) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "update fte.businesses set name = $2 where id = $1",
+                business_id,
+                name,
+            )
+
+    async def save_profile(self, profile: ProfileRecord) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """
+                insert into fte.profiles
+                    (user_id, whatsapp, store_name, store_url, policies_text, brand_voice, status, created_at, updated_at)
+                values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                on conflict (user_id) do update
+                    set whatsapp = excluded.whatsapp,
+                        store_name = excluded.store_name,
+                        store_url = excluded.store_url,
+                        policies_text = excluded.policies_text,
+                        brand_voice = excluded.brand_voice,
+                        status = excluded.status,
+                        updated_at = excluded.updated_at
+                """,
+                profile.user_id,
+                profile.whatsapp,
+                profile.store_name,
+                profile.store_url,
+                profile.policies_text,
+                profile.brand_voice,
+                profile.status,
+                profile.created_at,
+                profile.updated_at,
+            )
+
+    async def is_profile_completed(self, user_id: str) -> bool:
+        async with self.pool.acquire() as conn:
+            status = await conn.fetchval(
+                "select status from fte.profiles where user_id = $1", user_id
+            )
+            return status == "completed"
+
     async def create_user(self, record: UserRecord) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 insert into fte.users
-                    (user_id, business_id, email, name, password_hash, role, created_at)
-                values ($1, $2, lower($3), $4, $5, $6, $7)
+                    (user_id, username, business_id, email, name, password_hash, role, created_at)
+                values ($1, $2, $3, lower($4), $5, $6, $7, $8)
                 on conflict (email) do nothing
                 returning user_id
                 """,
                 record.user_id,
+                record.username,
                 record.business_id,
                 record.email,
                 record.name,
@@ -691,7 +734,7 @@ class PostgresStore(Store):
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                select user_id, business_id, email, name, password_hash, role, created_at
+                select user_id, username, business_id, email, name, password_hash, role, created_at
                   from fte.users where email = lower($1)
                 """,
                 email,
@@ -700,6 +743,7 @@ class PostgresStore(Store):
             return None
         return UserRecord(
             user_id=row["user_id"],
+            username=row["username"],
             business_id=row["business_id"],
             email=row["email"],
             name=row["name"],

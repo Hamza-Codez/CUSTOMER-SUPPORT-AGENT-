@@ -171,10 +171,16 @@ _TEMPLATE = r"""
       if (controller) controller.abort();
     }, 45000);
 
+    var contextData = null;
+    try {
+      var raw = localStorage.getItem("fte.widget.context");
+      if (raw) contextData = JSON.parse(raw);
+    } catch (e) {}
+
     fetch(API + "/chat/public", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-FTE-Site-Key": KEY },
-      body: JSON.stringify({ message: value, session_id: session }),
+      body: JSON.stringify({ message: value, session_id: session, ephemeral_context: contextData }),
       signal: controller ? controller.signal : undefined,
     })
       .then(function (r) {

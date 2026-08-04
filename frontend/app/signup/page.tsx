@@ -15,8 +15,7 @@ const MIN_PASSWORD = 10;
 export default function SignupPage() {
   const router = useRouter();
   const [form, setForm] = React.useState({
-    business_name: "",
-    name: "",
+    username: "",
     email: "",
     password: "",
   });
@@ -26,8 +25,7 @@ export default function SignupPage() {
   const shortPassword =
     form.password.length > 0 && form.password.length < MIN_PASSWORD;
   const ready =
-    form.business_name.trim() &&
-    form.name.trim() &&
+    form.username.trim() &&
     form.email.trim() &&
     form.password.length >= MIN_PASSWORD;
 
@@ -88,22 +86,13 @@ export default function SignupPage() {
       }
     >
       <form onSubmit={submit} className="flex flex-col gap-3.5">
-        <Field label="Store name">
+        <Field label="Username">
           <Input
-            value={form.business_name}
-            onChange={(e) => set("business_name", e.target.value)}
-            placeholder="Aeron Home Goods"
-            autoComplete="organization"
+            value={form.username}
+            onChange={(e) => set("username", e.target.value)}
+            placeholder="johndoe"
+            autoComplete="username"
             autoFocus
-          />
-        </Field>
-
-        <Field label="Your name">
-          <Input
-            value={form.name}
-            onChange={(e) => set("name", e.target.value)}
-            placeholder="Ayesha K."
-            autoComplete="name"
           />
         </Field>
 

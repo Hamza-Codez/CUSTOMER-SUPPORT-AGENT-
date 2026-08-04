@@ -30,6 +30,7 @@ import { ChatWidget, type ChatHandle } from "@/components/ChatWidget";
 import { DecisionCardView } from "@/components/DecisionCardView";
 import { ToolRack } from "@/components/ToolRack";
 import { EmailPreviewPanel } from "@/components/demo/EmailPreviewPanel";
+import { MockDashboard } from "@/components/demo/MockDashboard";
 import { OpsPeek } from "@/components/demo/OpsPeek";
 import { STEPS, type Side } from "@/components/demo/steps";
 import {
@@ -135,6 +136,12 @@ export default function DemoPage() {
     setCompleted((prev) => ({ ...prev, [step.id]: true }));
   }
 
+  React.useEffect(() => {
+    if (isDone && !isLast) {
+      setIndex((i) => i + 1);
+    }
+  }, [isDone, isLast]);
+
   async function performStep() {
     setError(null);
 
@@ -201,33 +208,12 @@ export default function DemoPage() {
           <Wordmark />
 
           <SideToggle side={side} onChange={setSide} />
-
-          <div className="ml-auto flex items-center gap-2">
-            <Badge tone="neutral">Seeded store</Badge>
-            {touring ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setTouring(false)}
-              >
-                Skip tour
-              </Button>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setTouring(true)}
-              >
-                Show tour
-              </Button>
-            )}
-          </div>
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="flex w-full min-w-0 min-h-0 flex-1 flex-col lg:flex-row">
         {/* The stage — always the real component, never a mock-up. */}
-        <section className="flex min-h-0 flex-1 flex-col border-line lg:border-r">
+        <section className="flex min-w-0 min-h-0 flex-1 flex-col border-line lg:border-r">
           {side === "customer" ? (
             <div className="flex min-h-0 flex-1">
               <div className="min-w-0 flex-1">
@@ -245,53 +231,56 @@ export default function DemoPage() {
               </aside>
             </div>
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+            <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-5 sm:px-6">
               {step.id === "ops" || completed["ops"] ? (
                 <OpsPeek />
               ) : (
-                <div className="mx-auto flex max-w-2xl flex-col gap-3">
-                  <p className="text-[11px] uppercase tracking-wider text-faint">
-                    Operator queue
-                  </p>
-                  {cards.length === 0 ? (
-                    <Card>
-                      <EmptyState
-                        title="Nothing waiting"
-                        hint="Ask for a refund above the automatic limit in the customer view, and it will appear here."
-                      />
-                    </Card>
-                  ) : (
-                    cards.map((card) => (
-                      <DecisionCardView
-                        key={card.escalation_id}
-                        card={card}
-                        busy={busy}
-                        onDecide={async (id, decision, reason) => {
-                          setBusy(true);
-                          try {
-                            await api.decide(
-                              id,
-                              decision,
-                              reason,
-                              DEMO_OPERATOR_TOKEN,
-                            );
-                            await loadQueue();
-                            if (step.id === "decision") markDone();
-                          } finally {
-                            setBusy(false);
-                          }
-                        }}
-                      />
-                    ))
-                  )}
-                </div>
+                <MockDashboard 
+                  operatorQueue={
+                    <>
+                      {cards.length === 0 ? (
+                        <Card>
+                          <EmptyState
+                            title="Nothing waiting"
+                            hint="Ask for a refund above the automatic limit in the customer view, and it will appear here."
+                          />
+                        </Card>
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {cards.map((card) => (
+                            <DecisionCardView
+                              key={card.escalation_id}
+                              card={card}
+                              busy={busy}
+                              onDecide={async (id, decision, reason) => {
+                                setBusy(true);
+                                try {
+                                  await api.decide(
+                                    id,
+                                    decision,
+                                    reason,
+                                    DEMO_OPERATOR_TOKEN,
+                                  );
+                                  await loadQueue();
+                                  if (step.id === "decision") markDone();
+                                } finally {
+                                  setBusy(false);
+                                }
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  }
+                />
               )}
             </div>
           )}
         </section>
 
         {/* The guide */}
-        {touring && (
+        {touring && side === "customer" && (
           <aside className="flex w-full shrink-0 flex-col border-t border-line bg-surface/40 lg:w-[24rem] lg:border-t-0">
             <div className="flex-1 overflow-y-auto p-4 sm:p-5">
               <Progress index={index} total={STEPS.length} />
@@ -314,9 +303,9 @@ export default function DemoPage() {
                     {step.body}
                   </p>
 
-                  {isDone && step.done && (
+                  {step.done && (
                     <p className="mt-3 flex gap-2 rounded-xl border border-ok/25 bg-ok/5 p-3 text-[12px] leading-relaxed text-ok">
-                      <Check size={14} className="mt-0.5 shrink-0" />
+                      <Check size={14} className="mt-0.5 shrink-0 opacity-70" />
                       {step.done}
                     </p>
                   )}
@@ -337,11 +326,6 @@ export default function DemoPage() {
                     {!isDone && !isLast && (
                       <Button onClick={performStep} disabled={busy}>
                         {busy ? "Working…" : step.action}
-                      </Button>
-                    )}
-                    {isDone && !isLast && (
-                      <Button onClick={() => setIndex((i) => i + 1)}>
-                        Next <ArrowRight size={15} />
                       </Button>
                     )}
                     {isLast && (

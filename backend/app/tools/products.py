@@ -32,14 +32,7 @@ async def product_catalog(
     """
     tenant = ctx.context
     tenant.note_tool("product_catalog")
-    products = await tenant.store.list_products(tenant.business_id)
-
-    matches = keyword.rank(
-        query,
-        products,
-        text_of=lambda p: (p.name, p.summary, " ".join(p.attributes.values())),
-        limit=MAX_RESULTS,
-    )
+    matches = await tenant.adapter.search_products(tenant.business_id, query)
 
     await audit.record(
         tenant,

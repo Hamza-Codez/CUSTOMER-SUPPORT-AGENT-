@@ -48,7 +48,7 @@ async def order_lookup(
     normalised = normalise_order_id(order_id)
     supplied_email = (email or "").strip()
 
-    record = await tenant.store.get_order(tenant.business_id, normalised)
+    record = await tenant.adapter.get_order(tenant.business_id, normalised)
 
     if record is None:
         await audit.record(

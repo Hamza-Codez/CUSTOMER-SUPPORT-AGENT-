@@ -34,6 +34,20 @@ class Settings(BaseSettings):
     # Model provider. `mock` is the default so the app boots with zero setup.
     model_provider: Literal["mock", "gemini"] = "mock"
 
+    # --- Groq: both LIGHTRON tiers ------------------------------------------
+    #
+    # Reasoning and voice both run here. The spec put reasoning on Gemini, but
+    # its free tier is 20 requests/day — roughly ten conversations for the whole
+    # platform — which rules it out as the path a real customer's question takes.
+    # Gemini keeps embeddings, which draw on a separate quota.
+    #
+    # Groq's model IDs churn and old ones are retired without notice, so both are
+    # env-configurable and neither is pinned in code. Verify against Groq's
+    # models page rather than trusting these defaults.
+    groq_api_key: str = ""
+    groq_reasoning_model: str = "openai/gpt-oss-120b"
+    groq_voice_model: str = "openai/gpt-oss-20b"
+
     gemini_api_key: str = ""
     # Verified working 2026-07-26. Note `gemini-2.5-flash` — the value the spec
     # suggested — is still listed by the models endpoint but returns 404 "no
@@ -204,8 +218,11 @@ class Settings(BaseSettings):
                 "MODEL_PROVIDER=mock answers from a deterministic lookup table. "
                 "It will look like it is working. Set MODEL_PROVIDER=gemini."
             )
-        if self.model_provider == "gemini" and not self.gemini_api_key.strip():
-            problems.append("MODEL_PROVIDER=gemini but GEMINI_API_KEY is empty.")
+        if self.model_provider != "mock" and not self.groq_api_key.strip():
+            problems.append(
+                "GROQ_API_KEY is empty. Both LIGHTRON tiers run on Groq, so "
+                "without it every customer question fails."
+            )
         if self.embedding_provider == "gemini" and not self.gemini_api_key.strip():
             problems.append("EMBEDDING_PROVIDER=gemini but GEMINI_API_KEY is empty.")
 

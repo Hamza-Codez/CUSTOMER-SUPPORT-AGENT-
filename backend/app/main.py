@@ -26,7 +26,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from app.agents.orchestrator import get_entry_agent
+from app.voice import render_voice
 from app.comms.templates import render_thanks_page
+from app.onboarding.api import router as onboarding_router
+from app.demo.api import router as demo_router
 from app.comms.widget import render_widget_js
 from app.core import audit
 from app.core.auth import SiteKeyDep, TenantContext, TenantDep
@@ -151,6 +154,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(onboarding_router)
+app.include_router(demo_router)
 
 
 async def require_operator(tenant: TenantDep) -> TenantContext:
@@ -474,6 +480,8 @@ async def chat_public(req: ChatRequest, tenant: SiteKeyDep) -> ChatResponse:
 
 async def _run_turn(req: ChatRequest, tenant: TenantContext) -> ChatResponse:
     tenant.session_id = req.session_id
+    if hasattr(tenant.adapter, "ephemeral_context"):
+        tenant.adapter.ephemeral_context = req.ephemeral_context
     await load_verified_identity(tenant)
     session = StoreSession(
         session_id=req.session_id,
@@ -577,11 +585,13 @@ async def _run_turn(req: ChatRequest, tenant: TenantContext) -> ChatResponse:
             reply=customer_reply, session_id=req.session_id, actions=actions
         )
 
-    return ChatResponse(
-        reply=result.final_output or "",
-        session_id=req.session_id,
-        actions=actions,
-    )
+    raw_reply = result.final_output or ""
+    if raw_reply:
+        customer_reply = await render_voice(tenant, raw_reply, [req.message])
+    else:
+        customer_reply = ""
+        
+    return ChatResponse(reply=customer_reply, session_id=req.session_id, actions=actions)
 
 
 async def _record_usage(tenant: TenantContext, result: Any) -> None:
@@ -672,11 +682,13 @@ async def list_escalations(
 async def _account_view(store: Any, user: UserRecord) -> AccountView:
     return AccountView(
         user_id=user.user_id,
+        username=user.username,
         business_id=user.business_id,
         business_name=await store.get_business_name(user.business_id) or "Your store",
         email=user.email,
         name=user.name,
         role=user.role,
+        profile_completed=await store.is_profile_completed(user.user_id) if hasattr(store, 'is_profile_completed') else False,
     )
 
 
@@ -704,16 +716,18 @@ async def signup(req: SignupRequest) -> AuthResponse:
     business_id = f"biz_{uuid.uuid4().hex[:12]}"
     user = UserRecord(
         user_id=f"usr_{uuid.uuid4().hex[:12]}",
+        username=req.username.strip(),
         business_id=business_id,
         email=req.email.lower(),
-        name=req.name.strip(),
+        name=req.username.strip(), # Using username as name for now until profile is complete
         password_hash=hash_password(req.password),
         role="operator",
     )
 
     # Business first: a user row pointing at a business that does not exist would
     # violate the foreign key, and the tenant is the thing actually being created.
-    await store.create_business(business_id, req.business_name.strip())
+    # Default business name until profile is completed
+    await store.create_business(business_id, f"{req.username}'s Store")
     if not await store.create_user(user):
         raise HTTPException(
             status_code=409,

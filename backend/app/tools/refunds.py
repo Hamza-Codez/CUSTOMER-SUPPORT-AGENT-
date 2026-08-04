@@ -85,6 +85,16 @@ async def refund_processor(
 
 async def store_refund(tenant: TenantContext, record: RefundRecord) -> bool:
     created = await tenant.store.create_refund(record)
+    if created:
+        # For Flavour A this might be a no-op or return an escalation response.
+        # For Flavour B this hits the actual Shopify/external API.
+        await tenant.adapter.create_refund(
+            business_id=tenant.business_id,
+            order_id=record.order_id,
+            amount=record.amount,
+            reason=record.reason
+        )
+
     await audit.record(
         tenant,
         action="refund_processor",

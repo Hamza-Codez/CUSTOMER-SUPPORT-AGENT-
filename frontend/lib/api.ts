@@ -81,14 +81,14 @@ export function signOut() {
  * provider retrying a rate limit left the promise unsettled and the UI with
  * nothing to say. A turn that genuinely takes longer than this is one the
  * customer should be told about rather than left watching. */
-const TIMEOUT_MS = 45_000;
+const TIMEOUT_MS = 90_000;
 
 export class TimeoutError extends ApiError {
-  constructor() {
+  constructor(isChat: boolean = false) {
     super(
-      "The agent didn't reply within 45 seconds. It may be starting up, or the " +
-        "model provider may be rate-limiting us — the free tier is 20 requests a " +
-        "day. Try again, and check the backend logs if it keeps happening.",
+      isChat 
+        ? "The agent didn't reply within 90 seconds. It may be starting up, or the model provider may be rate-limiting us. Try again."
+        : "The server didn't reply within 90 seconds. The database might be waking up from a paused state. Please try again.",
       408,
     );
     this.name = "TimeoutError";
@@ -118,7 +118,7 @@ async function request<T>(
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new TimeoutError();
+      throw new TimeoutError(path.includes("/chat"));
     }
     // A dead backend is the most common failure in development, so it gets a
     // message that says what to do rather than "Failed to fetch".
@@ -160,8 +160,7 @@ export const DEMO_OPERATOR_TOKEN = "ops-token";
 
 export const api = {
   signup: (body: {
-    business_name: string;
-    name: string;
+    username: string;
     email: string;
     password: string;
   }) => request<AuthResponse>("/auth/signup", { method: "POST", body, token: null }),
@@ -170,6 +169,22 @@ export const api = {
     request<AuthResponse>("/auth/login", { method: "POST", body, token: null }),
 
   me: (token?: string) => request<Account>("/auth/me", token ? { token } : {}),
+
+  completeProfile: (
+    body: {
+      whatsapp: string;
+      store_name: string;
+      store_url: string;
+      policies_text: string;
+      brand_voice: string;
+    },
+    token?: string,
+  ) =>
+    request<Account>("/auth/complete-profile", {
+      method: "POST",
+      body,
+      ...(token ? { token } : {}),
+    }),
 
   onboardingContext: (
     policies: { topic: string; body: string }[],
@@ -208,33 +223,65 @@ export const api = {
 
   health: () => request<Health>("/health", { token: null }),
 
-  chat: (message: string, sessionId: string, token?: string) =>
-    request<ChatResponse>("/chat", {
+  chat: (message: string, sessionId: string, token?: string) => {
+    const endpoint = token === DEMO_CUSTOMER_TOKEN ? "/demo/chat" : "/chat";
+    return request<ChatResponse>(endpoint, {
       method: "POST",
       body: { message, session_id: sessionId },
       ...(token ? { token } : {}),
-    }),
+    });
+  },
 
-  escalations: (
+  escalations: async (
     status?: "pending" | "approved" | "declined",
     token?: string,
-  ) =>
-    request<EscalationList>(
+  ) => {
+    if (token === DEMO_OPERATOR_TOKEN) {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      return {
+        escalations: [
+          {
+            escalation_id: "esc-1005",
+            status: status || "pending",
+            created_at: new Date().toISOString(),
+            customer: { name: "Ayesha K", verified: true, via: "chat" },
+            request: "Refund for ORD-1005",
+            policy_check: { result: "Within 30 days" },
+            proposed_action: { type: "refund", order_id: "ORD-1005", amount: "$150.00", method: "original_payment" },
+            options: ["Approve", "Decline"],
+            resolved_by: null,
+            resolution_reason: null
+          }
+        ]
+      } as EscalationList;
+    }
+    return request<EscalationList>(
       `/dashboard/escalations${status ? `?status_filter=${status}` : ""}`,
       token ? { token } : {},
-    ),
+    );
+  },
 
-  decide: (
+  decide: async (
     id: string,
     decision: "approve" | "decline",
     reason?: string,
     token?: string,
-  ) =>
-    request<DecisionResponse>(`/escalations/${id}/decision`, {
+  ) => {
+    if (token === DEMO_OPERATOR_TOKEN) {
+      await new Promise(resolve => setTimeout(resolve, 800));
+      return { 
+        escalation_id: id, 
+        status: decision === "approve" ? "approved" : "declined", 
+        outcome: "Processed", 
+        customer_reply: null 
+      };
+    }
+    return request<DecisionResponse>(`/escalations/${id}/decision`, {
       method: "POST",
       body: { decision, reason: reason || null },
       ...(token ? { token } : {}),
-    }),
+    });
+  },
 
   feedback: (token?: string) =>
     request<FeedbackSummary>("/dashboard/feedback", token ? { token } : {}),

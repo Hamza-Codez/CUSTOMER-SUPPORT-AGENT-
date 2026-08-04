@@ -272,6 +272,7 @@ create index if not exists conversation_usage_biz_idx
 create table if not exists fte.users (
     id            bigserial primary key,
     user_id       text        not null unique,
+    username      text        not null unique,
     business_id   text        not null references fte.businesses (id) on delete cascade,
     email         text        not null unique,
     name          text        not null,
@@ -317,3 +318,36 @@ create index if not exists site_keys_business_idx
 
 alter table fte.policies add column if not exists doc text not null default '';
 alter table fte.policies add column if not exists embedding vector(1536);
+alter table fte.users add column if not exists username text not null default '';
+
+-- --------------------------------------------------------------------------
+-- New Onboarding & Platform Tables
+-- --------------------------------------------------------------------------
+
+create table if not exists fte.profiles (
+    user_id       text        not null primary key references fte.users (user_id) on delete cascade,
+    whatsapp      text        not null default '',
+    store_name    text        not null default '',
+    store_url     text        not null default '',
+    policies_text text        not null default '',
+    brand_voice   text        not null default '',
+    status        text        not null default 'pending',
+    created_at    timestamptz not null default now(),
+    updated_at    timestamptz not null default now()
+);
+
+create table if not exists fte.subscriptions (
+    user_id       text        not null primary key references fte.users (user_id) on delete cascade,
+    plan          text        not null default 'trial',
+    trial_ends    timestamptz not null,
+    created_at    timestamptz not null default now()
+);
+
+create table if not exists fte.integrations (
+    user_id       text        not null primary key references fte.users (user_id) on delete cascade,
+    flavour       text        not null default 'A',
+    kb_id         text,
+    widget_key    text,
+    scraped_at    timestamptz,
+    created_at    timestamptz not null default now()
+);

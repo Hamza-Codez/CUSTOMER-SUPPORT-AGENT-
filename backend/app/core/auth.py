@@ -21,6 +21,7 @@ from fastapi import Depends, Header, HTTPException, status
 from app.core.config import get_settings
 from app.core.security import read_token
 from app.db import Store, get_store
+from app.adapters import DataAdapter, LocalScrapeAdapter
 
 
 @dataclass
@@ -39,6 +40,7 @@ class TenantContext:
     role: str
     actor: str
     store: Store
+    adapter: DataAdapter
 
     # Set by the /chat handler once the request body is known. An escalation has
     # to record which conversation it came from so the outcome can be returned to
@@ -46,7 +48,10 @@ class TenantContext:
     session_id: str = "default"
 
     # Set when a real session token identified an account; None for demo tokens.
+    # Both come from the signed token, never from the request body — the account
+    # a write lands on is not something a caller may name.
     user_email: str | None = None
+    user_id: str | None = None
 
     # --- run-scoped evidence ---------------------------------------------------
     # Names of tools that actually executed this run. Grounding is judged on this.
@@ -111,6 +116,7 @@ async def require_tenant(
 
     claims = read_token(token)
     if claims:
+        store_instance = get_store()
         return TenantContext(
             business_id=claims["biz"],
             role=claims.get("role", "operator"),
@@ -118,7 +124,9 @@ async def require_tenant(
             # tells you nothing about who acted.
             actor=f"{claims.get('role', 'operator')}:{claims.get('email', claims['sub'])}",
             user_email=claims.get("email"),
-            store=get_store(),
+            user_id=claims["sub"],
+            store=store_instance,
+            adapter=LocalScrapeAdapter(store_instance),
         )
 
     tokens = _parse_dev_tokens(get_settings().dev_tokens)
@@ -129,11 +137,13 @@ async def require_tenant(
         )
 
     business_id, role = tokens[token]
+    store_instance = get_store()
     return TenantContext(
         business_id=business_id,
         role=role,
         actor=f"{role}:{token}",
-        store=get_store(),
+        store=store_instance,
+        adapter=LocalScrapeAdapter(store_instance),
     )
 
 
@@ -206,6 +216,7 @@ async def require_site_key(
         # storefront widget, and pretending otherwise would make the audit log lie.
         actor=f"site_key:{record.key[:12]}",
         store=store,
+        adapter=LocalScrapeAdapter(store),
     )
 
 

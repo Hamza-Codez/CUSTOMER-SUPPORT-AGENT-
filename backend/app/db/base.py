@@ -155,11 +155,43 @@ class UserRecord:
     """
 
     user_id: str
+    username: str
     business_id: str
     email: str
     name: str
     password_hash: str
     role: str = "operator"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class ProfileRecord:
+    user_id: str
+    whatsapp: str = ""
+    store_name: str = ""
+    store_url: str = ""
+    policies_text: str = ""
+    brand_voice: str = ""
+    status: str = "pending"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class SubscriptionRecord:
+    user_id: str
+    plan: str = "trial"
+    trial_ends: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class IntegrationRecord:
+    user_id: str
+    flavour: str = "A"
+    kb_id: str | None = None
+    widget_key: str | None = None
+    scraped_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 

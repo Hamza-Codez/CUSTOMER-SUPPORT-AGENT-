@@ -1,23 +1,10 @@
 "use client";
 
-/**
- * Seller onboarding — the context feed from SPEC §12.
- *
- * This exists because a fresh account is an empty room: with no policies, the
- * agent correctly refuses every question, and a dashboard showing zeroes is not
- * a product experience. So the first thing a new seller does is teach it what
- * it is allowed to say.
- *
- * The policy text they paste becomes the passages their agent may cite, and
- * nothing else. Step three proves it by letting them ask.
- */
-
-import { ArrowRight, Check, Globe, Plus, Sparkles, Trash2 } from "lucide-react";
+import { ArrowRight, Check, Globe } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as React from "react";
 
 import { Wordmark } from "@/components/Brand";
-import { ChatWidget } from "@/components/ChatWidget";
 import {
   Button,
   Card,
@@ -25,64 +12,77 @@ import {
   Label,
   Textarea,
 } from "@/components/ui/primitives";
-import { ApiError, api, getAccount, getToken } from "@/lib/api";
+import { ApiError, api, getAccount, getToken, signIn } from "@/lib/api";
 import type { SiteScanResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type Draft = { topic: string; body: string };
+const STEPS = ["Contact Info", "Policies", "Brand Voice"];
 
-/** Starters, not defaults: prefilled so nobody faces an empty textarea, and
- * plainly editable so nobody ships our words as their policy. */
-const STARTERS: Draft[] = [
-  {
-    topic: "Refund window",
-    body: "Refunds are available within 30 days of delivery, provided the item is unused and in its original packaging. Refunds go back to the original payment method and take 5-10 business days to appear.",
-  },
-  {
-    topic: "Delivery times",
-    body: "Standard delivery takes 3-5 working days. Express delivery takes 1-2 working days. Orders placed before 2pm on a working day are dispatched the same day.",
-  },
-];
+/** The signed-in account's suggested store name, read hydration-safely.
+ *
+ * localStorage differs between the server render and the first client one, so
+ * this comes from an external store rather than an effect. The account is
+ * written once at sign-in and does not change while this page is open, hence
+ * the no-op subscribe. */
+const NEVER_CHANGES = () => () => {};
 
-const STEPS = ["Your policies", "Try it", "Done"];
+function useSuggestedStoreName(): string {
+  return React.useSyncExternalStore(
+    NEVER_CHANGES,
+    () => {
+      const account = getAccount();
+      return account ? `${account.username}'s Store` : "";
+    },
+    () => "",
+  );
+}
 
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = React.useState(0);
-  const [drafts, setDrafts] = React.useState<Draft[]>(STARTERS);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [saved, setSaved] = React.useState<number>(0);
-  const [sessionId] = React.useState(
-    () => `onboard-${Math.random().toString(36).slice(2, 9)}`,
-  );
-
-  const account = getAccount();
-  const usable = drafts.filter((d) => d.topic.trim() && d.body.trim());
+  
+  const [form, setForm] = React.useState({
+    store_name: "",
+    store_url: "",
+    whatsapp: "",
+    policies_text: "",
+    brand_voice: "",
+  });
 
   React.useEffect(() => {
     if (!getToken()) router.replace("/login");
   }, [router]);
 
-  function update(i: number, patch: Partial<Draft>) {
-    setDrafts((prev) => prev.map((d, n) => (n === i ? { ...d, ...patch } : d)));
+  // The suggested store name is *derived*, not written into state by an effect.
+  // Seeding state from localStorage in an effect meant a cascading render, and
+  // seeding it in useState would differ between the server render and the first
+  // client one. Reading it from an external store is correct on both counts, and
+  // an empty field simply falls back to the suggestion until the seller types.
+  const suggested = useSuggestedStoreName();
+  const storeName = form.store_name || suggested;
+
+  function set(field: keyof typeof form, value: string) {
+    setForm((prev) => ({ ...prev, [field]: value }));
   }
 
-  async function savePolicies() {
-    if (!usable.length || busy) return;
+  const step1Ready = storeName.trim() && form.store_url.trim() && form.whatsapp.trim();
+  const step2Ready = form.policies_text.trim();
+  const step3Ready = form.brand_voice.trim();
+
+  async function completeProfile() {
+    if (!step1Ready || !step2Ready || !step3Ready || busy) return;
     setBusy(true);
     setError(null);
     try {
-      const result = await api.onboardingContext(
-        usable.map((d) => ({ topic: d.topic.trim(), body: d.body.trim() })),
-      );
-      setSaved(result.passages);
-      setStep(1);
+      const result = await api.completeProfile({ ...form, store_name: storeName });
+      signIn(getToken()!, result.role, result); // update account context
+      router.push("/dashboard");
     } catch (err) {
       setError(
-        err instanceof ApiError ? err.message : "Could not save those policies.",
+        err instanceof ApiError ? err.message : "Could not complete profile.",
       );
-    } finally {
       setBusy(false);
     }
   }
@@ -129,163 +129,116 @@ export default function OnboardingPage() {
       <main className="flex-1 px-5 py-10">
         <div className="mx-auto max-w-2xl">
           {step === 0 && (
-            <>
-              <Label className="mb-2">Step one</Label>
-              <h1 className="text-title text-fg">
-                Teach it what it&apos;s allowed to say
-              </h1>
-              <p className="mb-7 mt-2.5 text-[14.5px] leading-relaxed text-muted">
-                Paste your real policies for{" "}
-                <span className="text-body">
-                  {account?.business_name ?? "your store"}
-                </span>
-                . These become the only things it can cite — ask it anything
-                outside them and it will say it can&apos;t confirm, rather than
-                inventing a rule that sounds plausible.
-              </p>
-
-              <SiteScanPanel
-                onImport={(imported) =>
-                  // Replaces the starters rather than appending to them: the
-                  // seller's own words are the point, and leaving ours mixed in
-                  // is how a demo policy ends up quoted at a real customer.
-                  setDrafts((prev) => {
-                    const kept = prev.filter(
-                      (d) =>
-                        d.topic.trim() &&
-                        d.body.trim() &&
-                        !STARTERS.some((s) => s.body === d.body),
-                    );
-                    return [...kept, ...imported];
-                  })
-                }
-              />
-
-              <div className="flex flex-col gap-3">
-                {drafts.map((draft, i) => (
-                  <Card key={i} className="p-4">
-                    <div className="mb-2.5 flex items-center gap-2">
-                      <Input
-                        value={draft.topic}
-                        onChange={(e) => update(i, { topic: e.target.value })}
-                        placeholder="Policy name, e.g. Refund window"
-                        className="h-9 flex-1 text-[13px]"
-                      />
-                      {drafts.length > 1 && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Remove policy"
-                          onClick={() =>
-                            setDrafts((prev) => prev.filter((_, n) => n !== i))
-                          }
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      )}
-                    </div>
-                    <Textarea
-                      value={draft.body}
-                      onChange={(e) => update(i, { body: e.target.value })}
-                      rows={4}
-                      placeholder="Write it exactly as you would tell a customer."
-                      className="text-[13px]"
-                    />
-                  </Card>
-                ))}
+            <div className="flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2">
+              <div>
+                <Label className="mb-2">Step one</Label>
+                <h1 className="text-title text-fg">
+                  Let&apos;s set up your store
+                </h1>
+                <p className="mt-2.5 text-[14.5px] leading-relaxed text-muted">
+                  Provide your core business details so the agent knows who it is working for and how to handle contact inquiries.
+                </p>
               </div>
 
-              <Button
-                variant="secondary"
-                size="sm"
-                className="mt-3"
-                onClick={() =>
-                  setDrafts((prev) => [...prev, { topic: "", body: "" }])
-                }
-              >
-                <Plus size={14} /> Add another
-              </Button>
+              <Card className="p-5 flex flex-col gap-4">
+                <Field label="Store Name">
+                  <Input 
+                    value={storeName}
+                    onChange={(e) => set("store_name", e.target.value)} 
+                    placeholder="e.g. Aeron Home Goods"
+                  />
+                </Field>
+
+                <Field label="Store Website URL">
+                  <Input 
+                    value={form.store_url} 
+                    onChange={(e) => set("store_url", e.target.value)} 
+                    placeholder="https://yourstore.com"
+                  />
+                </Field>
+
+                <Field label="WhatsApp Support Number">
+                  <Input 
+                    value={form.whatsapp} 
+                    onChange={(e) => set("whatsapp", e.target.value)} 
+                    placeholder="+1234567890"
+                  />
+                </Field>
+              </Card>
+
+              <div className="mt-2 flex items-center gap-3">
+                <Button size="lg" disabled={!step1Ready} onClick={() => setStep(1)}>
+                  Next <ArrowRight size={16} />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2">
+              <div>
+                <Label className="mb-2">Step two</Label>
+                <h1 className="text-title text-fg">Knowledge Base</h1>
+                <p className="mt-2.5 text-[14.5px] leading-relaxed text-muted">
+                  Paste your policies below. This is what the agent will read when answering customer queries.
+                </p>
+              </div>
+              
+              <SiteScanPanel 
+                onImport={(text) => {
+                  set("policies_text", (form.policies_text + "\n\n" + text).trim());
+                }} 
+              />
+
+              <Card className="p-4 flex flex-col gap-3">
+                <Label className="text-fg">Policies</Label>
+                <Textarea 
+                  rows={10} 
+                  value={form.policies_text} 
+                  onChange={(e) => set("policies_text", e.target.value)} 
+                  placeholder="Paste your refund policy, delivery times, and FAQs here..."
+                />
+              </Card>
+
+              <div className="mt-2 flex items-center gap-3">
+                <Button variant="secondary" onClick={() => setStep(0)}>Back</Button>
+                <Button size="lg" disabled={!step2Ready} onClick={() => setStep(2)}>
+                  Next <ArrowRight size={16} />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="flex flex-col gap-5 animate-in fade-in slide-in-from-bottom-2">
+              <div>
+                <Label className="mb-2">Step three</Label>
+                <h1 className="text-title text-fg">Brand Voice</h1>
+                <p className="mt-2.5 text-[14.5px] leading-relaxed text-muted">
+                  How should your agent sound? Write a short instruction on the tone of voice.
+                </p>
+              </div>
+
+              <Card className="p-5 flex flex-col gap-4">
+                <Label className="text-fg">Voice Instructions</Label>
+                <Textarea 
+                  rows={4} 
+                  value={form.brand_voice} 
+                  onChange={(e) => set("brand_voice", e.target.value)} 
+                  placeholder="e.g. Professional, courteous, but concise. Use emojis sparingly. Say 'we' instead of 'I'."
+                />
+              </Card>
 
               {error && (
-                <p className="mt-4 rounded-xl border border-alert/25 bg-alert/[0.06] p-3 text-[13px] text-alert">
+                <p className="rounded-xl border border-alert/25 bg-alert/[0.06] p-3 text-[13px] text-alert">
                   {error}
                 </p>
               )}
 
-              <div className="mt-7 flex items-center gap-3">
-                <Button
-                  size="lg"
-                  onClick={savePolicies}
-                  disabled={!usable.length || busy}
-                >
-                  {busy ? "Teaching it…" : `Save ${usable.length} ${usable.length === 1 ? "policy" : "policies"}`}
-                  {!busy && <ArrowRight size={16} />}
-                </Button>
-                <button
-                  onClick={() => router.push("/dashboard")}
-                  className="text-[13px] text-faint transition hover:text-body"
-                >
-                  Skip for now
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === 1 && (
-            <>
-              <Label className="mb-2">Step two</Label>
-              <h1 className="text-title text-fg">Ask it something</h1>
-              <p className="mb-6 mt-2.5 text-[14.5px] leading-relaxed text-muted">
-                {saved} {saved === 1 ? "passage is" : "passages are"} loaded. Ask
-                about one of them and it will answer with a citation. Ask about
-                something you didn&apos;t give it, and watch it decline.
-              </p>
-
-              <Card className="h-[26rem] overflow-hidden">
-                <ChatWidget
-                  sessionId={sessionId}
-                  quickReplies={usable.slice(0, 3).map((d) => ({
-                    label: d.topic || "Ask",
-                    text: `What is your ${d.topic.toLowerCase()}?`,
-                  }))}
-                />
-              </Card>
-
-              <div className="mt-6 flex items-center gap-3">
-                <Button size="lg" onClick={() => setStep(2)}>
-                  That works <ArrowRight size={16} />
-                </Button>
-                <button
-                  onClick={() => setStep(0)}
-                  className="text-[13px] text-faint transition hover:text-body"
-                >
-                  Edit the policies
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === 2 && (
-            <div className="pt-6 text-center">
-              <span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-accent/30 bg-accent/12 text-accent">
-                <Sparkles size={20} />
-              </span>
-              <h1 className="text-title text-fg">It&apos;s on shift</h1>
-              <p className="mx-auto mb-8 mt-2.5 max-w-md text-[14.5px] leading-relaxed text-muted">
-                Your dashboard is next. It will be quiet until real conversations
-                start — which is honest, rather than filling it with numbers
-                nothing has earned yet.
-              </p>
-              <div className="flex flex-wrap justify-center gap-3">
-                <Button size="lg" onClick={() => router.push("/dashboard")}>
-                  Open the dashboard <ArrowRight size={16} />
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="lg"
-                  onClick={() => router.push("/integrations")}
-                >
-                  Put it on my site
+              <div className="mt-2 flex items-center gap-3">
+                <Button variant="secondary" onClick={() => setStep(1)} disabled={busy}>Back</Button>
+                <Button size="lg" disabled={!step3Ready || busy} onClick={completeProfile}>
+                  {busy ? "Finishing..." : "Complete Setup"} {!busy && <Check size={16} />}
                 </Button>
               </div>
             </div>
@@ -296,15 +249,22 @@ export default function OnboardingPage() {
   );
 }
 
-/** Read the seller's own site and propose what to import.
- *
- * Onboarding used to require finding, copying and formatting policies the seller
- * had already published. This does that part, then stops: the extracted text is
- * shown, ticked and editable before it becomes something the agent will quote at
- * a customer. A heuristic that ran unattended deciding what your support agent
- * may say is exactly the kind of thing this product exists not to do.
- */
-function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-[12.5px] font-medium text-body">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function SiteScanPanel({ onImport }: { onImport: (text: string) => void }) {
   const [url, setUrl] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<SiteScanResult | null>(null);
@@ -319,8 +279,6 @@ function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
     try {
       const body = await api.scanSite(url.trim());
       setResult(body);
-      // Everything found is ticked by default — the seller is confirming, not
-      // assembling. Untick what's wrong.
       setChosen(new Set(body.pages.map((p) => p.url)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't read that site.");
@@ -331,27 +289,25 @@ function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
 
   function importChosen() {
     if (!result) return;
-    onImport(
-      result.pages
-        .filter((p) => chosen.has(p.url))
-        .map((p) => ({ topic: p.topic, body: p.text })),
-    );
+    const combined = result.pages
+      .filter((p) => chosen.has(p.url))
+      .map((p) => `## ${p.topic}\n${p.text}`)
+      .join("\n\n");
+    onImport(combined);
     setResult(null);
     setUrl("");
   }
 
   return (
-    <Card className="mb-5 p-5">
+    <Card className="p-5">
       <div className="mb-1 flex items-center gap-2">
         <Globe size={15} className="text-accent-soft" />
         <p className="text-[14px] font-medium text-fg">
-          Already published them? Point us at your site
+          Have existing policies online?
         </p>
       </div>
       <p className="mb-4 text-[12.5px] leading-relaxed text-muted">
-        We&apos;ll read your storefront, find the shipping, returns and FAQ pages,
-        and show you the text before anything is saved. Policies only — live order
-        data needs a proper connection, which is a conversation.
+        We can scan your site to pre-fill the text area below.
       </p>
 
       <form onSubmit={scan} className="flex flex-wrap gap-2">
@@ -359,11 +315,10 @@ function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://yourstore.com"
-          aria-label="Your storefront address"
-          className="min-w-48 flex-1"
+          className="min-w-48 flex-1 h-9"
         />
-        <Button type="submit" variant="secondary" disabled={busy || !url.trim()}>
-          {busy ? "Reading…" : "Scan"}
+        <Button type="submit" variant="secondary" size="sm" disabled={busy || !url.trim()} className="h-9">
+          {busy ? "Scanning…" : "Scan Site"}
         </Button>
       </form>
 
@@ -371,12 +326,6 @@ function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
 
       {result && (
         <div className="mt-4 flex flex-col gap-2">
-          {result.note && (
-            <p className="text-[12.5px] leading-relaxed text-muted">
-              {result.note}
-            </p>
-          )}
-
           {result.pages.map((page) => {
             const on = chosen.has(page.url);
             return (
@@ -405,37 +354,14 @@ function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] font-medium text-fg">
                     {page.topic}
-                    <span className="ml-2 font-normal text-faint">
-                      {page.matched}
-                    </span>
                   </span>
-                  <span className="mt-0.5 block truncate text-[11.5px] text-faint">
-                    {page.url}
-                  </span>
-                  <span className="mt-1.5 line-clamp-3 block text-[12px] leading-relaxed text-muted">
+                  <span className="mt-1.5 line-clamp-3 text-[12px] text-muted">
                     {page.text}
                   </span>
                 </span>
               </label>
             );
           })}
-
-          {result.skipped.length > 0 && (
-            <details className="text-[12px] text-faint">
-              <summary className="cursor-pointer">
-                {result.skipped.length} page
-                {result.skipped.length === 1 ? "" : "s"} couldn&apos;t be read
-              </summary>
-              <ul className="mt-2 flex flex-col gap-1 pl-3">
-                {result.skipped.map(([pageUrl, reason]) => (
-                  <li key={pageUrl} className="truncate">
-                    {pageUrl} — {reason}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-
           {result.pages.length > 0 && (
             <Button
               className="mt-1 self-start"
@@ -443,7 +369,7 @@ function SiteScanPanel({ onImport }: { onImport: (drafts: Draft[]) => void }) {
               onClick={importChosen}
               disabled={chosen.size === 0}
             >
-              Import {chosen.size} page{chosen.size === 1 ? "" : "s"} to edit
+              Import Selected
             </Button>
           )}
         </div>

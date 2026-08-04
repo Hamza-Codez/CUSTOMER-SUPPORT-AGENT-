@@ -80,7 +80,7 @@ async def refund_precheck(data: ToolInputGuardrailData) -> ToolGuardrailFunction
             output_info={"reason": "identity_not_verified", "order_id": order_id},
         )
 
-    record = await tenant.store.get_order(tenant.business_id, order_id)
+    record = await tenant.adapter.get_order(tenant.business_id, order_id)
     if record is None:
         return ToolGuardrailFunctionOutput.reject_content(
             message=f"Refund blocked: no order {order_id} exists on this account.",
@@ -179,7 +179,7 @@ async def refund_needs_approval(
     except (TypeError, ValueError):
         return True  # unparseable amounts are never auto-approved
 
-    record = await tenant.store.get_order(tenant.business_id, order_id)
+    record = await tenant.adapter.get_order(tenant.business_id, order_id)
     reasons = approval_reasons(
         record,
         amount,

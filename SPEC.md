@@ -1,438 +1,1406 @@
-# FTE Agent Platform — Technical Specification
+> **An AI employee that an e-commerce business plugs into its existing website to handle customer support conversations on behalf of the human support team.**
 
-*Companion to `FTE_Agent_Platform_Intent.md`. That document is the "why" and "what"; this is the "how." Written against the confirmed behaviour of the OpenAI Agents SDK (Python) driving Gemini through its OpenAI-compatible endpoint. Where the SDK or Gemini model names may have shifted, it is flagged inline — verify before locking.*
+# 1. The real-world story
 
-**Stack:** Next.js (frontend) · FastAPI on `uv` + `uvicorn` (backend) · PostgreSQL (data) · OpenAI Agents SDK (agent runtime) · Gemini API (model)
+Imagine I own an e-commerce store.
 
----
+My website already has:
 
-## 1. Scope of This Document
+-   Product pages
+    
+-   Order tracking
+    
+-   Shipping policy
+    
+-   Refund policy
+    
+-   FAQ
+    
+-   Contact page
+    
+-   Customer accounts
+    
+-   Maybe Shopify / custom backend
+    
+-   A human customer-support person
+    
 
-This spec covers the runtime architecture, the agent/tool/guardrail design, the data model, the API surface, the RAG pipeline, the frontend structure, and two detailed drafts requested for the build: the **seller-facing pricing-tier feature comparison** (§16) and the **demo playground step-flow** (§15). It intentionally stops short of line-by-line code — it's the blueprint a developer builds from.
+But customers still ask things like:
 
----
+> "Where is my order?"
 
-## 2. Architecture Overview
+> "Can I return these shoes?"
+
+> "I ordered the wrong size. What should I do?"
+
+> "Which one of these two products is better for me?"
+
+> "My order says delivered but I didn't receive it."
+
+Instead of making the customer:
+
+**Search FAQ → Open policy → Find order → Email support → Wait**
+
+I put a **chat bubble** on my website.
+
+The customer opens it.
+
+```text
+        Customer Website
+              │
+              ▼
+       ┌─────────────┐
+       │   Chat Box  │
+       └──────┬──────┘
+              │
+              ▼
+        "Hi, how can I help?"
 
 ```
-                         ┌───────────────────────────────────────────┐
-                         │              FRONTEND (Next.js)             │
-                         │  Landing · Pricing · Auth · Demo · Dashboard│
-                         └───────────────┬─────────────────────────────┘
-                                         │  HTTPS / JSON  (authenticated)
-                         ┌───────────────▼─────────────────────────────┐
-                         │            BACKEND (FastAPI / uv)            │
-                         │                                             │
-                         │  API routes ──► Auth + Audit middleware     │
-                         │       │                                     │
-                         │       ▼                                     │
-                         │  ┌──────────── Agent Runtime ────────────┐  │
-                         │  │  Runner (loop, handoffs, approvals)   │  │
-                         │  │  Orchestrator ─► Support / Orders /   │  │
-                         │  │                 Products / Refunds    │  │
-                         │  │  Guardrails (input · output · tool)   │  │
-                         │  └──────────────┬────────────────────────┘  │
-                         │                 │ tools only (the frontier) │
-                         │       ┌─────────▼─────────┐                 │
-                         │       │   TOOL LAYER      │                 │
-                         │       │ orders·products·  │                 │
-                         │       │ policies·refunds· │                 │
-                         │       │ email·escalation  │                 │
-                         │       └───┬──────────┬────┘                 │
-                         └───────────┼──────────┼──────────────────────┘
-                                     │          │
-                       ┌─────────────▼──┐   ┌───▼───────────┐   ┌──────────────┐
-                       │  PostgreSQL    │   │  RAG store    │   │  Gemini API  │
-                       │ (records+audit)│   │ (parsed docs) │   │ (via OpenAI  │
-                       └────────────────┘   └───────────────┘   │  compat SDK) │
-                                                                └──────────────┘
+
+Now the AI employee handles the conversation.
+
+That is the **product**.
+
+----------
+
+# 2. What is the AI employee?
+
+Think of it like this:
+
+```text
+                    AI EMPLOYEE
+                        │
+                 Customer Support
+                        │
+                 ┌──────┴──────┐
+                 │ Controller  │
+                 │ / Manager   │
+                 └──────┬──────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+        ▼               ▼               ▼
+   Order Agent     Product Agent    Policy Agent
+        │               │               │
+        ▼               ▼               ▼
+    Order API       Product API      Knowledge
+
 ```
 
-**The one rule that shapes everything:** the model never touches PostgreSQL directly. Every read and write passes through a typed tool in the tool layer. Tools are the audited, rate-limited, least-privilege border between the LLM and real data.
+The customer doesn't know or care that there are 5 agents.
 
----
+They see:
 
-## 3. Tech Stack & Rationale
+> **One AI employee.**
 
-| Layer | Choice | Why |
-|---|---|---|
-| Frontend | Next.js (App Router) | Page-based routing for the multi-page site + demo; SSR for SEO/GEO/AEO on marketing pages |
-| Backend | FastAPI, run by `uvicorn` | Async, typed (Pydantic), fast; native fit for streaming agent responses |
-| Packaging | `uv` | Fast, reproducible Python dependency + venv management |
-| Agent runtime | OpenAI Agents SDK (Python) | Built-in agent loop, handoffs, guardrails, sessions, tracing, and resumable approval flows |
-| Model | Gemini (via OpenAI-compatible endpoint) | Cost/capability target; drops into the SDK with a custom client |
-| Data | PostgreSQL | Relational records + audit log; dummy/seed DB for demos, same schema for production |
-| Retrieval | Vector store over parsed docs | Grounded, no-invention answers |
-| Email | SMTP | Themed summary + feedback mailer |
+Internally, the employee has specialists.
 
----
+So your statement:
 
-## 4. Model Layer — Gemini via the Agents SDK
+> "AI employee with multiple specialist agents"
 
-The Agents SDK is designed for OpenAI models but works against any OpenAI-compatible endpoint, and Gemini exposes exactly that. The confirmed wiring is: point an `AsyncOpenAI` client at Gemini's OpenAI-compatible base URL, wrap it in a chat-completions model, and hand that model to each agent.
+is exactly right.
 
-```python
-# core/model.py  (illustrative — your own minimal version)
-import os
-from agents import AsyncOpenAI, OpenAIChatCompletionsModel, set_tracing_disabled
+The **AI employee is the product abstraction**.
 
-def gemini_model(model_name: str | None = None):
-    client = AsyncOpenAI(
-        api_key=os.environ["GEMINI_API_KEY"],
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    )
-    set_tracing_disabled(True)  # SDK tracing uploads to OpenAI; disable or route to your own processor
-    return OpenAIChatCompletionsModel(
-        model=model_name or os.environ["GEMINI_MODEL"],  # keep the model string in env
-        openai_client=client,
-    )
+The **specialist agents are the internal architecture**.
+
+----------
+
+# 3. The most important change to your architecture
+
+Your current spec starts here:
+
+> Agents → Tools → Guardrails → RAG → Sessions → Runner → Database
+
+That is why it feels complicated.
+
+I would start from here instead:
+
+```text
+                    SELLER
+                      │
+                      │ installs FTE
+                      ▼
+             ┌─────────────────┐
+             │  FTE Controller  │
+             │                  │
+             │ "AI Employee"    │
+             └────────┬────────┘
+                      │
+                      │ embedded in
+                      ▼
+              SELLER'S WEBSITE
+                      │
+                      ▼
+                  CUSTOMER
+                      │
+                      ▼
+                 Chat Widget
+
 ```
 
-**Notes & flags:**
-- **Model name lives in `.env`** (`GEMINI_MODEL`), never hardcoded. Gemini's flash-tier model names have moved fast (2.0 → 2.5 → newer). Confirm the current model code and its input/output token limits before launch.
-- **Tracing:** the SDK's built-in tracing targets OpenAI's backend. With Gemini, either disable it (`set_tracing_disabled(True)`) or attach a custom trace processor so you don't leak data or hit auth errors.
-- **Alternative path — LiteLLM:** the SDK also supports a LiteLLM adapter covering 100+ models, useful if you later want to A/B a model or fail over. Keep the model construction behind one `gemini_model()`-style factory so swapping providers is a one-line change.
-- **Function-calling parity:** validate that Gemini's tool-calling and structured-output behaviour matches what the SDK expects (this is the single highest-risk integration point — test the refund tool + a handoff end to end early).
+Then ask:
 
----
+> **What does this employee need to do its job?**
 
-## 5. Agent Architecture
+Answer:
 
-### 5.1 Primitives used
+1.  Understand customer question
+    
+2.  Know the seller's policies
+    
+3.  Access customer/order information
+    
+4.  Access product information
+    
+5.  Take permitted actions
+    
+6.  Escalate to a human when necessary
+    
 
-The SDK gives five building blocks, all of which this system uses:
+That's it.
 
-- **Agents** — an LLM with instructions, a scoped tool set, and optional handoffs/guardrails.
-- **Function tools** — plain Python functions exposed to the agent via a decorator; the SDK auto-generates the schema (Pydantic-validated) from the signature.
-- **Handoffs** — transfer of the conversation from one agent to another within a single run; the receiving agent sees prior history unless filtered.
-- **Guardrails** — input, output, and per-tool validation that can trip a "tripwire" and stop the run.
-- **Sessions** — persistent conversation memory across turns with no manual state plumbing.
-- **Runner** — drives the tool loop, switches agents on handoff, and can **pause for human approval** before executing a gated action.
+Now your architecture naturally appears.
 
-### 5.2 The agent team
+----------
 
-| Agent | Job | Tools it may use | Can hand off to |
-|---|---|---|---|
-| **Orchestrator (Triage)** | Read intent, route to the right specialist | *(none — routing only)* | all specialists |
-| **Support/FAQ** | Grounded answers from parsed docs | `policy_retriever` | Orchestrator |
-| **Orders** | Verify identity, report order status | `order_lookup` | Refunds, Orchestrator |
-| **Products** | Explain & compare products | `product_catalog` | Orchestrator |
-| **Refunds** | Policy check + prepare/execute refund | `policy_retriever`, `order_lookup`, `refund_processor`, `human_escalation` | Human (approval) |
+# 4. The actual system
 
-Two patterns are available and both are used:
-- **Handoff** (transfer the whole conversation) for a clean role switch — e.g., Orders → Refunds when a status check turns into a refund.
-- **Agent-as-tool** (call a specialist for a sub-answer without transferring) — e.g., Support calls Products for a quick comparison mid-answer.
+I would simplify your architecture into **4 major systems**.
 
-### 5.3 Sessions & context
+## A. FTE Control Plane
 
-Each conversation maps to a Session so the FTE remembers what's been said (verified identity, the order in question) without re-asking. The business's **context feed** (policies, catalog, tone, thresholds) is injected as agent instructions + retrievable data, not stuffed into every prompt — keeping token cost down.
+This is **your platform**.
 
----
+The e-commerce owner comes here.
 
-## 6. Tool Layer — The Data Frontier
+```text
+your-platform.com
 
-### 6.1 Pattern
+Seller
+  │
+  ├── Create account
+  │
+  ├── Create FTE
+  │
+  ├── Connect store
+  │
+  ├── Configure FTE
+  │
+  ├── Upload policies
+  │
+  ├── Set permissions
+  │
+  └── Get integration code
 
-Every tool is a typed Python function registered with the SDK's function-tool decorator; the SDK generates and validates the schema. Tools return **only the fields the agent needs**, in a structured shape, to minimise reasoning tokens.
-
-```python
-# tools/orders.py  (illustrative)
-from agents import function_tool
-from pydantic import BaseModel
-
-class OrderStatus(BaseModel):
-    order_id: str
-    status: str
-    last_update: str
-    carrier: str | None
-    eta: str | None
-
-@function_tool
-async def order_lookup(order_id: str, email: str) -> OrderStatus:
-    """Return the status of an order after verifying it belongs to the email."""
-    # 1. auth check  2. scoped SELECT  3. write audit log  4. return typed subset
-    ...
 ```
 
-### 6.2 Tool catalog
+This is the "admin that offers integration and guides" you mentioned.
 
-| Tool | Access | Inputs | Returns | Guarded by |
-|---|---|---|---|---|
-| `order_lookup` | read | order_id, email | typed status subset | identity match + audit log |
-| `product_catalog` | read | query / product_ids | product + comparison fields | cache |
-| `policy_retriever` | read (RAG) | question, topic | grounded passage + source ref | confidence threshold |
-| `refund_processor` | **write, gated** | order_id, amount, reason | refund result / pending-approval | action guardrail + human approval above cap |
-| `send_mailer` | write | template, recipient, payload | send status | idempotency key |
-| `human_escalation` | write | decision-card payload | escalation id | always logged |
+----------
 
-### 6.3 Optimisation strategy (the cost engine)
+## B. FTE Runtime
 
-- **Least privilege:** each agent is constructed with only the tools its role needs — Support literally cannot call `refund_processor`.
-- **Scoped returns:** tools SELECT and return only required columns; no `SELECT *` reaching the model.
-- **Caching:** slow-changing reads (policies, catalog) are cached; the agent doesn't re-fetch every turn.
-- **Idempotent writes:** `refund_processor` and `send_mailer` use idempotency keys so a retried run can't double-refund or double-email.
-- **Minimal calls:** the orchestrator sequences lookups deliberately rather than firing redundant queries.
-- **Full observability:** every tool call is logged with duration and (rough) token cost for later tuning.
+This is where the AI employee actually works.
 
----
-
-## 7. Guardrails Specification
-
-The SDK supports three guardrail scopes; the system uses all three.
-
-### 7.1 Input guardrails (before the first agent runs)
-Run on the incoming message; trip a tripwire to reject early.
-- **Scope guard** — is this in-domain (support/orders/products/refunds)? Off-topic → polite redirect.
-- **Safety/injection guard** — screen hostile input and prompt-injection attempts.
-- (Identity is enforced at the tool layer, not here, since it's action-specific.)
-
-### 7.2 Output guardrails (after the final agent, before the reply reaches the user)
-- **Grounding guard** — does the answer trace to a retrieved source? Ungrounded policy/product claims trip the wire → fall back to "let me get a person" rather than guess.
-- **Tone guard** — keep replies polite and on-brand.
-
-### 7.3 Tool guardrails (around each function-tool call)
-This is where money-moving safety lives, because it runs on **every invocation** even deep inside a handoff chain.
-- **Input tool guardrail on `refund_processor`** — verify identity is confirmed, amount ≤ configured auto-cap, and the policy check passed. Otherwise skip execution and route to human approval.
-- **Output tool guardrail** — sanity-check results before they re-enter the model.
-
-```python
-# guardrails/grounding.py  (illustrative shape)
-from agents import output_guardrail, GuardrailFunctionOutput
-
-@output_guardrail
-async def must_be_grounded(ctx, agent, output) -> GuardrailFunctionOutput:
-    grounded = bool(getattr(output, "source_ref", None))
-    return GuardrailFunctionOutput(
-        output_info={"grounded": grounded},
-        tripwire_triggered=not grounded,   # trip → SDK stops, we escalate instead
-    )
-```
-
-### 7.4 Human approval (the built-in human-in-the-loop)
-The runner can **pause a run for approval** before a gated tool executes. `refund_processor` (above the auto-cap) is configured to require approval — the run halts, a Decision Card is created, and execution resumes only after an operator approves. This is the mechanism behind §8.
-
----
-
-## 8. Human Handoff & the Decision Card
-
-When a refund exceeds the auto-cap, is out of policy, or the customer is upset/asks for a person:
-
-1. The Refunds agent calls `human_escalation` (or the runner pauses `refund_processor` for approval).
-2. A **Decision Card** record is written and pushed to the seller's operator queue (dashboard + optional email/websocket).
-3. The card carries everything the human needs to decide in seconds: verified customer, request, the policy that applies, the proposed action, and one-click **Approve / Adjust / Decline (with reason)**.
-4. The operator's decision resumes the paused run (or resolves the escalation); the outcome flows back into the same conversation and is fully logged.
-
-**Decision Card payload (JSON shape):**
-```json
-{
-  "escalation_id": "esc_10432",
-  "customer": {"name": "Ayesha K.", "verified": true, "via": "order+email"},
-  "request": "Refund — Order #10432, item arrived damaged",
-  "policy_check": {"rule": "30-day damaged-goods", "result": "eligible"},
-  "proposed_action": {"type": "refund", "amount": 59.00, "method": "original"},
-  "options": ["approve", "adjust", "decline_with_reason"],
-  "created_at": "2026-07-26T10:14:00Z"
-}
-```
-
----
-
-## 9. Data Model (PostgreSQL)
-
-Core tables (seed/dummy for demos, same schema in production):
-
-| Table | Key columns | Notes |
-|---|---|---|
-| `businesses` | id, name, plan_tier, mode | the seller tenant |
-| `subscriptions` | id, business_id, tier, billing_cycle, status | monthly/yearly |
-| `operators` | id, business_id, email, role | staff who approve handoffs |
-| `customers` | id, business_id, email, name | end users |
-| `products` | id, business_id, name, attrs (jsonb), price, stock | catalog + comparison fields |
-| `orders` | id, business_id, customer_id, status, carrier, eta | tracked |
-| `order_items` | id, order_id, product_id, qty, price | line items |
-| `policies` | id, business_id, type, source_doc, text | source for RAG + refund checks |
-| `refunds` | id, order_id, amount, reason, status, approved_by | status: auto/pending/approved/declined |
-| `escalations` | id, business_id, decision_card (jsonb), status, resolved_by | operator queue |
-| `conversations` | id, business_id, customer_id, session_id, mode | ties to SDK session |
-| `messages` | id, conversation_id, role, content, tool_calls (jsonb) | transcript |
-| `audit_logs` | id, actor, action, target, detail (jsonb), ts | **every** sensitive read/write |
-
-`business_id` is the tenancy key on every row — the platform is multi-tenant from day one, and tools always filter by it.
-
----
-
-## 10. RAG / Knowledge-Base Pipeline
-
-The "parse structure so ready-to-use info is always at hand, no invented answers" requirement, made concrete:
-
-1. **Ingest** — seller uploads policy/FAQ/help docs during onboarding.
-2. **Parse** — `rag/parser.py` normalises docs into clean text + metadata (doc type, section).
-3. **Chunk & embed** — split into passages, embed, store vectors + source references.
-4. **Retrieve** — `policy_retriever` tool takes a question, returns the top passage(s) **with a `source_ref`**.
-5. **Ground** — the output grounding guardrail (§7.2) requires that `source_ref` before an answer ships. No source → no claim → escalate or say "I'll check with a person."
-
-Refund policy checks read from the same parsed `policies` so rulings and answers never drift apart.
-
----
-
-## 11. Backend API (FastAPI)
-
-| Method / Route | Purpose | Auth |
-|---|---|---|
-| `POST /auth/signup`, `/auth/login` | account + session | public → issues token |
-| `POST /chat` | send a message, run the agent, stream reply | customer/session |
-| `GET /orders/{id}` | (thin passthrough; real access via tools) | verified |
-| `GET /dashboard/escalations` | operator queue | operator |
-| `POST /escalations/{id}/decision` | approve/adjust/decline → resumes run | operator |
-| `POST /onboarding/context` | upload policies/catalog/tone (context feed) | seller |
-| `POST /integrations/request` | seller asks to embed the FTE | seller |
-| `POST /webhooks/email` | mailer callbacks | signed |
-
-`/chat` is the hot path: authenticate → load session → run the agent via the Runner (which handles the tool loop, handoffs, and any approval pause) → stream the result → persist transcript + audit.
-
----
-
-## 12. Auth & Audit Logging
-
-- **Auth** — token-based sessions; customer identity for account actions is additionally proven at the tool layer (order_id + email match) before any record is read or changed.
-- **Audit** — `audit_logs` captures every sensitive tool call: who, what action, on what target, when, with a jsonb detail blob. This satisfies the "authenticated flows + retrieval logs" foundation rule and is the backbone of trust for a system that can move money.
-
----
-
-## 13. Email / SMTP Themed Mailer
-
-After a resolved conversation, `send_mailer` sends a branded (purple/black/zinc-themed) email containing a **summary + short feedback form**. Templates live server-side; sends are idempotent (one summary per resolution). Doubles as passive advertising via a subtle "handled by your FTE" footer.
-
----
-
-## 14. Frontend (Next.js) Structure
-
-| Route | Type | Purpose |
-|---|---|---|
-| `/` | SSR marketing | hero + 5–6 sections; SEO/GEO/AEO tuned |
-| `/features` | SSR marketing | the FTE "job description" |
-| `/pricing` | SSR marketing | tier comparison (§16) |
-| `/login`, `/signup` | client | auth → gateway to demo |
-| `/demo` | client, gated | the playground (§15) |
-| `/dashboard` | client, gated | dual customer/seller view + escalation queue |
-| `/integrations` | client | guided embed request |
-
-Shared components: `ChatWidget`, `QuickReplies`, `ProductCompareCard`, `DecisionCard`, `ModeToggle` (customer ↔ seller), `StepCard` (demo). Theme tokens (purple/black/zinc gradient, minimalist) defined once and reused across marketing + app.
-
----
-
-## 15. DRAFT — Demo Playground Step-Flow
-
-*Goal: a first-timer signs up and, in ~2 minutes of guided clicking, experiences both sides of the FTE on realistic seed data, then lands on pricing/integration wanting it. Every step is a card with a clear clickable — nobody gets lost.*
-
-**Entry:** user signs up → lands in `/demo` → a welcome **StepCard**: "Meet your new full-time employee. Let's watch it work." → **[Start the tour]**
-
-| Step | View | What the user sees / does | The "aha" |
-|---|---|---|---|
-| 1. Meet the FTE | Customer | Chat opens with quick-reply chips: *Track order · Product help · Refund · Refund policy*. Card: "These are one-tap — try tapping **Track order**." | It's guided, not a blank box |
-| 2. Identity gate | Customer | FTE asks for a demo order ID/email (pre-filled sample). Card explains: "It verifies who it's talking to before revealing anything." | It's secure, not reckless |
-| 3. Real lookup | Customer | FTE returns a real (seed) order status with carrier + ETA in friendly language. | It reads actual data, not canned text |
-| 4. Product compare | Customer | User taps **Product help** → FTE shows a side-by-side `ProductCompareCard` with a **[Proceed]** button. | Support quietly becomes sales |
-| 5. Refund — in policy | Customer | User requests a refund that qualifies → FTE explains the policy warmly and prepares it. Card: "Watch what happens with a *harder* one next." | Grounded, polite, policy-driven |
-| 6. Refund — needs a human | Customer | User requests an out-of-policy refund → FTE escalates instead of guessing. Card: "Now flip to the seller's side to see what the human gets." → **[Switch to Seller view]** |  Knows its limits |
-| 7. The Decision Card | Seller (toggle) | `ModeToggle` flips to operator view; the escalation from step 6 sits in the queue as a **Decision Card** with Approve / Adjust / Decline. User clicks **Approve**. | The "ready to click OK" magic |
-| 8. It closes the loop | Customer (toggle back) | The approved outcome appears in the same conversation; a themed summary+feedback email preview is shown. | Seamless, end to end |
-| 9. See the ops view | Seller | Quick peek at records, stock, policies, logs — the dual dashboard. | It's an operator, not a toy |
-| 10. Convert | — | Final card: "This is your FTE on sample data. Ready for it on *your* store?" → **[See pricing]** and **[Request integration]**. | Clear next step |
-
-**Design rules for the flow:** each step advances only on a click (self-paced), the customer↔seller toggle is the emotional centre (do it at least twice), everything runs on the PostgreSQL seed DB so it feels real, and the tour is skippable for repeat visitors.
-
----
-
-## 16. DRAFT — Seller-Facing Pricing-Tier Comparison
-
-*Two feature tiers, each billable monthly or yearly (yearly discounted). Tier 1 is anchored at the $20/mo from the brief; Tier 2's price is proposed — set it once you've costed model usage.*
-
-| | **Core** — $20/mo *(yearly: ~$192/yr, 2 months free)* | **Pro** — *$49/mo proposed* *(yearly discounted)* |
-|---|---|---|
-| **Best for** | Solo sellers & small stores getting started | Growing stores that want automation + embedding |
-| Deployment | Hosted dual dashboard | Hosted **+ embedded** on your own site |
-| Conversations / month | Included allowance (e.g. 1,000) | Higher allowance (e.g. 10,000) + overage |
-| Specialist agents | All 5 (support, orders, products, refunds, triage) | All 5 |
-| Knowledge base | Up to N docs | Expanded docs + priority re-index |
-| Refund auto-approval cap | Lower cap; rest escalates | Higher configurable cap |
-| Escalation / Decision Cards | ✓ | ✓ + priority routing & multiple operator seats |
-| Product comparison cards | ✓ | ✓ |
-| Themed summary + feedback mailer | ✓ (standard theme) | ✓ (custom branding) |
-| Operator seats | 1 | Multiple |
-| Analytics | Core metrics (deflection, CSAT) | Full analytics + cost-per-conversation dashboard |
-| Site integration | Request only | Guided embed included |
-| Support | Standard | Priority |
-| Audit log retention | Standard window | Extended |
-
-**Framing for the pricing page:** lead with Core's price and the "hire a full-time employee for the price of lunch" hook; position Pro around *embedding into your own store* + *higher automation limits* + *team seats* — the things a scaling business needs. Keep yearly as the nudged default (show the discount inline).
-
-*Open decisions:* exact conversation allowances, the Pro price point, and whether a usage-based overage or a third enterprise tier is worth adding.
-
----
-
-## 17. Environment & Configuration (`.env`)
+```text
+Customer Message
+       │
+       ▼
+┌──────────────────┐
+│  FTE Controller  │
+│                  │
+│ Understand intent│
+│ Check context    │
+│ Select specialist│
+└────────┬─────────┘
+         │
+         ▼
+   Specialist Agent
+         │
+         ▼
+       Tools
+         │
+         ▼
+   Seller's Systems
 
 ```
-GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.5-flash          # verify current model code before launch
-DATABASE_URL=postgresql://...
-JWT_SECRET=...
-SMTP_HOST=...
-SMTP_USER=...
-SMTP_PASS=...
-AUTO_REFUND_CAP=25.00                   # tune per business at onboarding
+
+The controller is basically the AI employee's **brain/manager**.
+
+It decides:
+
+> "This is an order question."
+
+→ Order specialist
+
+> "This is a refund question."
+
+→ Refund specialist
+
+> "This is a product recommendation."
+
+→ Product specialist
+
+The customer still experiences **one conversation**.
+
+----------
+
+## C. Integration Layer
+
+This is the piece your current spec is missing the most.
+
+Your AI cannot magically know the seller's data.
+
+Suppose the seller uses:
+
+```text
+Next.js
+   │
+   ├── PostgreSQL
+   ├── Orders
+   ├── Products
+   ├── Customers
+   └── Auth
+
 ```
-Never commit `.env`. Per-business overrides (refund cap, tone, thresholds) live in the DB, not the env.
+
+Your FTE needs access.
+
+So you need an integration mechanism.
+
+Conceptually:
+
+```text
+                    YOUR FTE
+                       │
+                 Integration API
+                       │
+              ┌────────┴─────────┐
+              │                  │
+         Seller's API       Seller's Webhooks
+              │                  │
+              └────────┬─────────┘
+                       │
+                  Seller Store
+
+```
+
+The seller might say:
+
+> "I want my FTE to check orders."
+
+Your platform provides a documented integration:
+
+```text
+GET /customer/{id}/orders
+GET /orders/{id}
+GET /products
+POST /refund-request
+
+```
+
+Or the seller connects Shopify / WooCommerce / custom APIs.
+
+This is the real bridge between:
+
+**AI Employee ↔ Business**
+
+Without this, your FTE is basically a demo.
+
+----------
+
+# 5. The simplest possible customer flow
+
+Let's take one real scenario.
+
+Customer opens the seller's website.
+
+```text
+          Seller Website
+                │
+                ▼
+        ┌───────────────┐
+        │   💬 Chat     │
+        │               │
+        │ Hi! How can   │
+        │ I help you?   │
+        └───────┬───────┘
+                │
+                ▼
+       "Where is my order?"
+                │
+                ▼
+          FTE Controller
+                │
+         Intent = ORDER
+                │
+                ▼
+         Order Specialist
+                │
+                ▼
+        order_lookup_tool
+                │
+                ▼
+         Seller API / DB
+                │
+                ▼
+         Order Information
+                │
+                ▼
+        Order Specialist
+                │
+                ▼
+            Customer
+
+```
+
+Customer sees:
+
+> "Your order #10432 is currently in transit. It's expected to arrive on Friday."
+
+That's the entire magic.
+
+----------
+
+# 6. Now a harder scenario
+
+Customer says:
+
+> "My package arrived damaged. I want a refund."
+
+The flow becomes:
+
+```text
+Customer
+    │
+    ▼
+FTE Controller
+    │
+    ▼
+Refund Specialist
+    │
+    ├── Check customer identity
+    │
+    ├── Check order
+    │
+    ├── Check refund policy
+    │
+    └── Determine eligibility
+            │
+            ▼
+       ┌───────────────┐
+       │   Eligible?   │
+       └───────┬───────┘
+          Yes  │  No
+               │
+       ┌───────┴─────────┐
+       ▼                 ▼
+   Process refund    Human escalation
+       │                 │
+       ▼                 ▼
+   Confirmation      Seller dashboard
+
+```
+
+Again, the customer doesn't see any of this complexity.
+
+They just see:
+
+> "I can help you with that."
+
+This is where your **AI employee concept becomes real**.
+
+----------
+
+# 7. So what does the seller actually do?
+
+This is where I would simplify your whole onboarding.
+
+The seller visits your platform.
+
+### Step 1 — Create FTE
+
+```text
+Create your AI Employee
+
+Name: Sarah
+Role: Customer Support
+Brand: XYZ Store
+
+```
+
+----------
+
+### Step 2 — Connect store
+
+The platform asks:
+
+> How does your store work?
+
+Options:
+
+```text
+[ Shopify ]
+
+[ WooCommerce ]
+
+[ Custom API ]
+
+[ My Next.js Application ]
+
+```
+
+For your specific target, **Custom API** is important.
+
+----------
+
+### Step 3 — Connect capabilities
+
+The seller chooses what the AI can access.
+
+```text
+☑ Products
+☑ Order status
+☑ Customer information
+☑ Shipping status
+☑ Refund policies
+☐ Issue refunds automatically
+☑ Escalate to human
+
+```
+
+This is extremely important.
+
+The seller is effectively defining the FTE's **job permissions**.
+
+----------
+
+### Step 4 — Give it knowledge
+
+Seller uploads:
+
+```text
+Refund Policy.pdf
+Shipping Policy.pdf
+Returns.md
+FAQ.md
+Brand Guidelines.md
+
+```
+
+The system processes them.
+
+Now the FTE knows:
+
+> "This business allows returns within 30 days."
+
+----------
+
+### Step 5 — Install the chat
+
+Your platform generates:
+
+```text
+<script ...>
+
+```
+
+or preferably an SDK:
+
+```tsx
+<FTEChat
+  businessId="xyz"
+  customerId={user.id}
+/>
+
+```
+
+The seller adds this to their Next.js website.
+
+Now:
+
+```text
+Seller Website
+       │
+       ▼
+   Chat Widget
+       │
+       ▼
+Your FTE Platform
+       │
+       ├── Knowledge
+       ├── Customer data
+       ├── Orders
+       ├── Products
+       └── Actions
+
+```
+
+**Now you have a real product.**
+
+----------
+
+# 8. Your FTE lifecycle
+
+You asked an important question earlier:
+
+> What exactly is the lifecycle of an FTE?
+
+I think yours should be:
+
+```text
+                 CREATE
+                    │
+                    ▼
+               CONFIGURE
+                    │
+                    ▼
+                CONNECT
+                    │
+                    ▼
+                 TRAIN
+             (knowledge base)
+                    │
+                    ▼
+                 TEST
+                    │
+                    ▼
+                DEPLOY
+                    │
+                    ▼
+                OPERATE
+                    │
+             ┌──────┴──────┐
+             │             │
+             ▼             ▼
+        Human Help    Continuous Update
+             │             │
+             └──────┬──────┘
+                    ▼
+                 IMPROVE
+
+```
+
+In product terms:
+
+> **Create → Configure → Connect → Deploy → Operate → Improve**
+
+That is your actual FTE lifecycle.
+
+----------
+
+# 9. What I would remove from your current spec for V1
+
+I would **not** start with:
+
+-   Complex agent-as-tool architecture
+    
+-   Multiple handoff patterns
+    
+-   Custom tracing processors
+    
+-   Complex subscription architecture
+    
+-   Advanced analytics
+    
+-   Email marketing footer
+    
+-   SEO/GEO/AEO architecture
+    
+-   10-step demo playground
+    
+-   Multiple pricing tiers
+    
+-   Complex human approval pause/resume
+    
+-   Full multi-tenant production architecture
+    
+-   Every possible specialist agent
+    
+
+These are not necessarily bad.
+
+They are just **not the first problem you need to solve**.
+
+Your first proof should be:
+
+> **Can an e-commerce owner connect their store and deploy an AI employee that handles real customer support conversations using their real business data?**
+
+If you can prove that, you have a product.
+
+----------
+
+# 10. The V1 architecture I recommend
+
+I would reduce your entire system to:
+
+```text
+                    ┌──────────────────────┐
+                    │    FTE CONTROL PLANE │
+                    │                      │
+                    │  Seller Dashboard    │
+                    │  FTE Configuration   │
+                    │  Knowledge Base      │
+                    │  Integration Setup   │
+                    └──────────┬───────────┘
+                               │
+                               │ config
+                               ▼
+┌─────────────┐        ┌──────────────────────┐
+│   Customer  │        │     FTE RUNTIME      │
+│             │───────►│                      │
+│ Chat Widget │        │  Controller Agent   │
+└─────────────┘        │          │           │
+                       │          ▼           │
+                       │   Specialist Agent  │
+                       │          │           │
+                       │          ▼           │
+                       │        Tools        │
+                       └──────────┬───────────┘
+                                  │
+                         Integration Layer
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                    ▼                           ▼
+             Seller's APIs              Knowledge Base
+             Orders/Products            Policies/FAQs
+
+```
+
+And the **human operator** sits outside the normal AI loop:
+
+```text
+Customer
+   │
+   ▼
+AI Employee
+   │
+   ├── Can solve → Customer
+   │
+   └── Cannot solve
+          │
+          ▼
+     Human Operator
+          │
+          ▼
+       Customer
+
+```
+
+----------
+
+## My strongest recommendation
+
+**Stop thinking about this as "how do I build an agent platform?"**
+
+Start thinking:
+
+> **"How do I build an AI customer-support employee that can be hired by an e-commerce business?"**
+
+Then ask:
+
+> What information does this employee need?
+
+> What systems does this employee need access to?
+
+> What actions is this employee allowed to perform?
+
+> When must this employee ask a human?
+
+> How does the business hire, configure, and deploy this employee?
+
+Those five questions will produce a **much simpler and more valuable architecture** than the current spec.
+
+Your current document is trying to design the **entire company/product/platform at once**. I would instead design **one complete vertical slice**:
+
+**Seller signs up → Connects Next.js store → Configures FTE → Adds chat widget → Customer asks question → FTE accesses real order/product/policy data → FTE answers → Complex case goes to human.**
+
+That is the **real MVP**. Once this works, your specialist agents, guardrails, RAG, audit logs, subscriptions, analytics, and additional integrations can grow around it.
+
+
+
+> **An AI employee that an e-commerce business plugs into its existing website to handle customer support conversations on behalf of the human support team.**
+
+The multiple specialist agents are **how that employee works internally**.
+
+Let's simplify the entire story.
 
 ---
 
-## 18. Project Structure
+# 1. The real-world story
 
-*(As in the intent doc's Appendix A — `frontend/` Next.js + `backend/app/` with `agents/`, `tools/`, `guardrails/`, `handoffs/`, `rag/`, `db/`, `core/`, `schemas/`. The `tools/` package is the only place with DB access.)*
+Imagine I own an e-commerce store.
+
+My website already has:
+
+* Product pages
+* Order tracking
+* Shipping policy
+* Refund policy
+* FAQ
+* Contact page
+* Customer accounts
+* Maybe Shopify / custom backend
+* A human customer-support person
+
+But customers still ask things like:
+
+> "Where is my order?"
+
+> "Can I return these shoes?"
+
+> "I ordered the wrong size. What should I do?"
+
+> "Which one of these two products is better for me?"
+
+> "My order says delivered but I didn't receive it."
+
+Instead of making the customer:
+
+**Search FAQ → Open policy → Find order → Email support → Wait**
+
+I put a **chat bubble** on my website.
+
+The customer opens it.
+
+```text
+        Customer Website
+              │
+              ▼
+       ┌─────────────┐
+       │   Chat Box  │
+       └──────┬──────┘
+              │
+              ▼
+        "Hi, how can I help?"
+```
+
+Now the AI employee handles the conversation.
+
+That is the **product**.
 
 ---
 
-## 19. Observability & Cost Control
+# 2. What is the AI employee?
 
-- Per-tool timing + token accounting logged to `audit_logs` / a metrics sink.
-- SDK tracing routed to a **custom processor** (not OpenAI's default) since the model is Gemini.
-- Caching hit-rate and escalation-rate tracked as product-health metrics.
-- Success signals to watch: deflection rate, handoff-approval rate, resolution time, CSAT, cost per conversation.
+Think of it like this:
+
+```text
+                    AI EMPLOYEE
+                        │
+                 Customer Support
+                        │
+                 ┌──────┴──────┐
+                 │ Controller  │
+                 │ / Manager   │
+                 └──────┬──────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+        ▼               ▼               ▼
+   Order Agent     Product Agent    Policy Agent
+        │               │               │
+        ▼               ▼               ▼
+    Order API       Product API      Knowledge
+```
+
+The customer doesn't know or care that there are 5 agents.
+
+They see:
+
+> **One AI employee.**
+
+Internally, the employee has specialists.
+
+So your statement:
+
+> "AI employee with multiple specialist agents"
+
+is exactly right.
+
+The **AI employee is the product abstraction**.
+
+The **specialist agents are the internal architecture**.
 
 ---
 
-## 20. Security & Compliance Notes
+# 3. The most important change to your architecture
 
-- Multi-tenant isolation enforced at the tool layer via `business_id`.
-- Identity proven before account-specific reads/writes.
-- Money-moving actions are gated + human-approved above the cap.
-- Full audit trail; PII minimised in tool returns (scoped columns only).
-- Prompt-injection screening at the input guardrail.
+Your current spec starts here:
+
+> Agents → Tools → Guardrails → RAG → Sessions → Runner → Database
+
+That is why it feels complicated.
+
+I would start from here instead:
+
+```text
+                    SELLER
+                      │
+                      │ installs FTE
+                      ▼
+             ┌─────────────────┐
+             │  FTE Controller  │
+             │                  │
+             │ "AI Employee"    │
+             └────────┬────────┘
+                      │
+                      │ embedded in
+                      ▼
+              SELLER'S WEBSITE
+                      │
+                      ▼
+                  CUSTOMER
+                      │
+                      ▼
+                 Chat Widget
+```
+
+Then ask:
+
+> **What does this employee need to do its job?**
+
+Answer:
+
+1. Understand customer question
+2. Know the seller's policies
+3. Access customer/order information
+4. Access product information
+5. Take permitted actions
+6. Escalate to a human when necessary
+
+That's it.
+
+Now your architecture naturally appears.
 
 ---
 
-## 21. Build Phases (suggested)
+# 4. The actual system
 
-1. **Foundation** — `uv` backend, FastAPI skeleton, PostgreSQL seed DB, Gemini-via-SDK model factory, one working agent + one tool end to end.
-2. **The team** — orchestrator + specialists, handoffs, sessions.
-3. **Safety** — input/output/tool guardrails, refund auto-cap, human approval + Decision Card.
-4. **Knowledge** — doc parsing, RAG, grounding guardrail, policy checks.
-5. **Comms** — SMTP themed mailer + feedback form.
-6. **Frontend** — marketing pages (SEO/GEO/AEO), auth, dual dashboard.
-7. **Demo** — the guided playground (§15) on seed data — the GTM centrepiece.
-8. **Commercialise** — pricing (§16), integration request flow, analytics.
+I would simplify your architecture into **4 major systems**.
+
+## A. FTE Control Plane
+
+This is **your platform**.
+
+The e-commerce owner comes here.
+
+```text
+your-platform.com
+
+Seller
+  │
+  ├── Create account
+  │
+  ├── Create FTE
+  │
+  ├── Connect store
+  │
+  ├── Configure FTE
+  │
+  ├── Upload policies
+  │
+  ├── Set permissions
+  │
+  └── Get integration code
+```
+
+This is the "admin that offers integration and guides" you mentioned.
 
 ---
 
-## 22. Open Decisions to Resolve
+## B. FTE Runtime
 
-- Confirm the **current Gemini model code** + token limits, and validate its tool-calling/structured-output behaviour against the SDK early.
-- Set **Pro tier price** and per-tier conversation allowances.
-- Choose the **vector store** for RAG (managed vs. `pgvector` in the same PostgreSQL).
-- Decide **tracing sink** (custom processor vs. disabled).
-- Define the exact **refund auto-cap** default and whether it's global or per-business.
+This is where the AI employee actually works.
+
+```text
+Customer Message
+       │
+       ▼
+┌──────────────────┐
+│  FTE Controller  │
+│                  │
+│ Understand intent│
+│ Check context    │
+│ Select specialist│
+└────────┬─────────┘
+         │
+         ▼
+   Specialist Agent
+         │
+         ▼
+       Tools
+         │
+         ▼
+   Seller's Systems
+```
+
+The controller is basically the AI employee's **brain/manager**.
+
+It decides:
+
+> "This is an order question."
+
+→ Order specialist
+
+> "This is a refund question."
+
+→ Refund specialist
+
+> "This is a product recommendation."
+
+→ Product specialist
+
+The customer still experiences **one conversation**.
 
 ---
 
-*This spec is deliberately implementation-flexible on the parts that change fastest (model names, SDK surface). Treat the flagged items as verify-before-build, and keep the model + provider behind a single factory so the riskiest dependency stays swappable.*
+## C. Integration Layer
+
+This is the piece your current spec is missing the most.
+
+Your AI cannot magically know the seller's data.
+
+Suppose the seller uses:
+
+```text
+Next.js
+   │
+   ├── PostgreSQL
+   ├── Orders
+   ├── Products
+   ├── Customers
+   └── Auth
+```
+
+Your FTE needs access.
+
+So you need an integration mechanism.
+
+Conceptually:
+
+```text
+                    YOUR FTE
+                       │
+                 Integration API
+                       │
+              ┌────────┴─────────┐
+              │                  │
+         Seller's API       Seller's Webhooks
+              │                  │
+              └────────┬─────────┘
+                       │
+                  Seller Store
+```
+
+The seller might say:
+
+> "I want my FTE to check orders."
+
+Your platform provides a documented integration:
+
+```text
+GET /customer/{id}/orders
+GET /orders/{id}
+GET /products
+POST /refund-request
+```
+
+Or the seller connects Shopify / WooCommerce / custom APIs.
+
+This is the real bridge between:
+
+**AI Employee ↔ Business**
+
+Without this, your FTE is basically a demo.
+
+---
+
+# 5. The simplest possible customer flow
+
+Let's take one real scenario.
+
+Customer opens the seller's website.
+
+```text
+          Seller Website
+                │
+                ▼
+        ┌───────────────┐
+        │   💬 Chat     │
+        │               │
+        │ Hi! How can   │
+        │ I help you?   │
+        └───────┬───────┘
+                │
+                ▼
+       "Where is my order?"
+                │
+                ▼
+          FTE Controller
+                │
+         Intent = ORDER
+                │
+                ▼
+         Order Specialist
+                │
+                ▼
+        order_lookup_tool
+                │
+                ▼
+         Seller API / DB
+                │
+                ▼
+         Order Information
+                │
+                ▼
+        Order Specialist
+                │
+                ▼
+            Customer
+```
+
+Customer sees:
+
+> "Your order #10432 is currently in transit. It's expected to arrive on Friday."
+
+That's the entire magic.
+
+---
+
+# 6. Now a harder scenario
+
+Customer says:
+
+> "My package arrived damaged. I want a refund."
+
+The flow becomes:
+
+```text
+Customer
+    │
+    ▼
+FTE Controller
+    │
+    ▼
+Refund Specialist
+    │
+    ├── Check customer identity
+    │
+    ├── Check order
+    │
+    ├── Check refund policy
+    │
+    └── Determine eligibility
+            │
+            ▼
+       ┌───────────────┐
+       │   Eligible?   │
+       └───────┬───────┘
+          Yes  │  No
+               │
+       ┌───────┴─────────┐
+       ▼                 ▼
+   Process refund    Human escalation
+       │                 │
+       ▼                 ▼
+   Confirmation      Seller dashboard
+```
+
+Again, the customer doesn't see any of this complexity.
+
+They just see:
+
+> "I can help you with that."
+
+This is where your **AI employee concept becomes real**.
+
+---
+
+# 7. So what does the seller actually do?
+
+This is where I would simplify your whole onboarding.
+
+The seller visits your platform.
+
+### Step 1 — Create FTE
+
+```text
+Create your AI Employee
+
+Name: Sarah
+Role: Customer Support
+Brand: XYZ Store
+```
+
+---
+
+### Step 2 — Connect store
+
+The platform asks:
+
+> How does your store work?
+
+Options:
+
+```text
+[ Shopify ]
+
+[ WooCommerce ]
+
+[ Custom API ]
+
+[ My Next.js Application ]
+```
+
+For your specific target, **Custom API** is important.
+
+---
+
+### Step 3 — Connect capabilities
+
+The seller chooses what the AI can access.
+
+```text
+☑ Products
+☑ Order status
+☑ Customer information
+☑ Shipping status
+☑ Refund policies
+☐ Issue refunds automatically
+☑ Escalate to human
+```
+
+This is extremely important.
+
+The seller is effectively defining the FTE's **job permissions**.
+
+---
+
+### Step 4 — Give it knowledge
+
+Seller uploads:
+
+```text
+Refund Policy.pdf
+Shipping Policy.pdf
+Returns.md
+FAQ.md
+Brand Guidelines.md
+```
+
+The system processes them.
+
+Now the FTE knows:
+
+> "This business allows returns within 30 days."
+
+---
+
+### Step 5 — Install the chat
+
+Your platform generates:
+
+```text
+<script ...>
+```
+
+or preferably an SDK:
+
+```tsx
+<FTEChat
+  businessId="xyz"
+  customerId={user.id}
+/>
+```
+
+The seller adds this to their Next.js website.
+
+Now:
+
+```text
+Seller Website
+       │
+       ▼
+   Chat Widget
+       │
+       ▼
+Your FTE Platform
+       │
+       ├── Knowledge
+       ├── Customer data
+       ├── Orders
+       ├── Products
+       └── Actions
+```
+
+**Now you have a real product.**
+
+---
+
+# 8. Your FTE lifecycle
+
+You asked an important question earlier:
+
+> What exactly is the lifecycle of an FTE?
+
+I think yours should be:
+
+```text
+                 CREATE
+                    │
+                    ▼
+               CONFIGURE
+                    │
+                    ▼
+                CONNECT
+                    │
+                    ▼
+                 TRAIN
+             (knowledge base)
+                    │
+                    ▼
+                 TEST
+                    │
+                    ▼
+                DEPLOY
+                    │
+                    ▼
+                OPERATE
+                    │
+             ┌──────┴──────┐
+             │             │
+             ▼             ▼
+        Human Help    Continuous Update
+             │             │
+             └──────┬──────┘
+                    ▼
+                 IMPROVE
+```
+
+In product terms:
+
+> **Create → Configure → Connect → Deploy → Operate → Improve**
+
+That is your actual FTE lifecycle.
+
+---
+
+# 9. What I would remove from your current spec for V1
+
+I would **not** start with:
+
+* Complex agent-as-tool architecture
+* Multiple handoff patterns
+* Custom tracing processors
+* Complex subscription architecture
+* Advanced analytics
+* Email marketing footer
+* SEO/GEO/AEO architecture
+* 10-step demo playground
+* Multiple pricing tiers
+* Complex human approval pause/resume
+* Full multi-tenant production architecture
+* Every possible specialist agent
+
+These are not necessarily bad.
+
+They are just **not the first problem you need to solve**.
+
+Your first proof should be:
+
+> **Can an e-commerce owner connect their store and deploy an AI employee that handles real customer support conversations using their real business data?**
+
+If you can prove that, you have a product.
+
+---
+
+# 10. The V1 architecture I recommend
+
+I would reduce your entire system to:
+
+```text
+                    ┌──────────────────────┐
+                    │    FTE CONTROL PLANE │
+                    │                      │
+                    │  Seller Dashboard    │
+                    │  FTE Configuration   │
+                    │  Knowledge Base      │
+                    │  Integration Setup   │
+                    └──────────┬───────────┘
+                               │
+                               │ config
+                               ▼
+┌─────────────┐        ┌──────────────────────┐
+│   Customer  │        │     FTE RUNTIME      │
+│             │───────►│                      │
+│ Chat Widget │        │  Controller Agent   │
+└─────────────┘        │          │           │
+                       │          ▼           │
+                       │   Specialist Agent  │
+                       │          │           │
+                       │          ▼           │
+                       │        Tools        │
+                       └──────────┬───────────┘
+                                  │
+                         Integration Layer
+                                  │
+                    ┌─────────────┴─────────────┐
+                    │                           │
+                    ▼                           ▼
+             Seller's APIs              Knowledge Base
+             Orders/Products            Policies/FAQs
+```
+
+And the **human operator** sits outside the normal AI loop:
+
+```text
+Customer
+   │
+   ▼
+AI Employee
+   │
+   ├── Can solve → Customer
+   │
+   └── Cannot solve
+          │
+          ▼
+     Human Operator
+          │
+          ▼
+       Customer
+```
+
+---
+
+## My strongest recommendation
+
+**Stop thinking about this as "how do I build an agent platform?"**
+
+Start thinking:
+
+> **"How do I build an AI customer-support employee that can be hired by an e-commerce business?"**
+
+Then ask:
+
+> What information does this employee need?
+
+> What systems does this employee need access to?
+
+> What actions is this employee allowed to perform?
+
+> When must this employee ask a human?
+
+> How does the business hire, configure, and deploy this employee?
+
+Those five questions will produce a **much simpler and more valuable architecture** than the current spec.
+
+Your current document is trying to design the **entire company/product/platform at once**. I would instead design **one complete vertical slice**:
+
+**Seller signs up → Connects Next.js store → Configures FTE → Adds chat widget → Customer asks question → FTE accesses real order/product/policy data → FTE answers → Complex case goes to human.**
+
+That is the **real MVP**. Once this works, your specialist agents, guardrails, RAG, audit logs, subscriptions, analytics, and additional integrations can grow around it.

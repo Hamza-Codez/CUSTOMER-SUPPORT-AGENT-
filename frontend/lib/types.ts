@@ -186,11 +186,13 @@ export type SiteScanResult = {
 
 export type Account = {
   user_id: string;
+  username: string;
   business_id: string;
   business_name: string;
   email: string;
   name: string;
   role: string;
+  profile_completed?: boolean;
 };
 
 export type AuthResponse = {

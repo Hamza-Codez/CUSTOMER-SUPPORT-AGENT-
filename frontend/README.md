@@ -65,6 +65,9 @@ lib/
 
 ### What the design commits to
 
+Tokens, colour roles, the chat surfaces and what the green means are documented
+in [THEME.md](THEME.md).
+
 - **Tokens, not ad-hoc colour.** Every shade is a token in `globals.css`. A
   component with a hex literal in it is a bug — changing the palette should be
   one edit, and two screens built weeks apart should still match.

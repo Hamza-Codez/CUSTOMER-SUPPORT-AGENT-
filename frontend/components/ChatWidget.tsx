@@ -31,8 +31,49 @@ const WORKING_STAGES = [
   "Composing a reply",
 ];
 
-let counter = 0;
-const nextId = () => `m${++counter}`;
+const nextId = () => `m-${Math.random().toString(36).slice(2, 9)}`;
+
+const MOCK_ANSWERS: { keywords: string[], reply: string, actions?: { kind: string; label: string; ref: string | null }[] }[] = [
+  {
+    keywords: ["hi", "hello", "hey", "greetings", "morning", "afternoon"],
+    reply: "Hello! I'm here to help you with your orders, products, and any other questions. How can I assist you today?",
+    actions: []
+  },
+  {
+    keywords: ["order", "track", "where", "ord-1002"],
+    reply: "I found your order ORD-1002. It was dispatched yesterday and is currently with the courier. You can expect delivery by tomorrow afternoon.",
+    actions: [{ kind: "lookup_order", label: "Order Search", ref: null }]
+  },
+  {
+    keywords: ["dispatch", "delivery", "long", "time", "how long"],
+    reply: "Standard dispatch takes 1-2 business days. Delivery usually follows within 3-5 business days depending on your location. We also offer express shipping!",
+    actions: []
+  },
+  {
+    keywords: ["compare", "better", "aero", "desk", "lite", "pro"],
+    reply: "The AeroDesk Pro features a motorized sit-stand mechanism and premium bamboo finish, while the AeroDesk Lite is a fixed-height, more compact option perfect for smaller spaces. Both are highly rated!",
+    actions: [{ kind: "compare_products", label: "Product Comparison", ref: null }]
+  },
+  {
+    keywords: ["refund", "ord-1005", "return"],
+    reply: "I can help with your refund for ORD-1005. I see it's within our 30-day return window. I've initiated the return process and sent a shipping label to your email.",
+    actions: [{ kind: "initiate_refund", label: "Refund Process", ref: null }, { kind: "escalate", label: "Escalation", ref: null }]
+  }
+];
+
+function getMockResponse(text: string, sessionId: string): ChatResponse {
+  const lowerText = text.toLowerCase();
+  for (const answer of MOCK_ANSWERS) {
+    if (answer.keywords.some(k => lowerText.includes(k))) {
+      return { reply: answer.reply, session_id: sessionId, actions: answer.actions || [] };
+    }
+  }
+  return {
+    reply: "I'd be happy to help you with that! To give you the most accurate information, could you please provide a few more details? I can assist with tracking orders, product comparisons, returns, and general inquiries.",
+    session_id: sessionId,
+    actions: []
+  };
+}
 
 export type ChatHandle = { send: (text: string) => void };
 
@@ -75,7 +116,15 @@ export function ChatWidget({
     setBusy(true);
 
     try {
-      const response = await api.chat(trimmed, sessionId, token);
+      let response: ChatResponse;
+      if (token === "demo-token") {
+        // 2.5 second mock delay for a smooth "working" animation
+        await new Promise(resolve => setTimeout(resolve, 2500));
+        response = getMockResponse(trimmed, sessionId);
+      } else {
+        response = await api.chat(trimmed, sessionId, token);
+      }
+      
       setMessages((prev) =>
         prev.map((m) =>
           m.id === placeholder.id

@@ -27,7 +27,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.config import get_settings
-from app.db.base import PolicyRecord, Store
+from app.db.base import PolicyRecord
+from app.adapters import DataAdapter
 from app.rag import keyword
 from app.rag.embeddings import embed_one
 
@@ -54,7 +55,7 @@ def _text_of(record: PolicyRecord) -> tuple[str, str]:
 
 
 async def retrieve_policies(
-    store: Store,
+    adapter: DataAdapter,
     business_id: str,
     question: str,
     limit: int = 2,
@@ -66,7 +67,7 @@ async def retrieve_policies(
     unrelated.
     """
     settings = get_settings()
-    candidates = await store.list_policies(business_id)
+    candidates = await adapter.list_policies(business_id)
     if not candidates:
         return []
 
@@ -83,7 +84,7 @@ async def retrieve_policies(
             query_vector = await embed_one(question)
             vector_hits = {
                 record.source_ref: similarity
-                for record, similarity in await store.search_policies(
+                for record, similarity in await adapter.search_policies(
                     business_id, query_vector, limit=CANDIDATES
                 )
             }

@@ -17,6 +17,7 @@ from pydantic import BaseModel, EmailStr, Field
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     session_id: str = Field(default="default", min_length=1, max_length=128)
+    ephemeral_context: dict | None = None
 
 
 class AgentAction(BaseModel):
@@ -238,8 +239,7 @@ class FeedbackSummary(BaseModel):
 
 
 class SignupRequest(BaseModel):
-    business_name: str = Field(min_length=1, max_length=120)
-    name: str = Field(min_length=1, max_length=120)
+    username: str = Field(min_length=1, max_length=120)
     email: EmailStr
     # Length is the control that actually matters; composition rules push people
     # toward "Password1!" and no further.
@@ -253,11 +253,13 @@ class LoginRequest(BaseModel):
 
 class AccountView(BaseModel):
     user_id: str
+    username: str
     business_id: str
     business_name: str
     email: str
     name: str
     role: str
+    profile_completed: bool
 
 
 class AuthResponse(BaseModel):
@@ -267,6 +269,14 @@ class AuthResponse(BaseModel):
 
 
 # --- HTTP contract: onboarding -------------------------------------------------
+
+
+class CompleteProfileRequest(BaseModel):
+    whatsapp: str = Field(default="", max_length=50)
+    store_name: str = Field(min_length=1, max_length=120)
+    store_url: str = Field(min_length=3, max_length=300)
+    policies_text: str = Field(default="", max_length=20000)
+    brand_voice: str = Field(default="", max_length=2000)
 
 
 class PolicyDraft(BaseModel):
